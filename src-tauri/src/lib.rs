@@ -61,6 +61,8 @@ mod raw_processing;
 mod relight;
 mod tagging;
 mod tagging_utils;
+#[cfg(target_os = "linux")]
+mod wayland_subsurface;
 mod white_balance;
 mod window_customizer;
 
@@ -158,6 +160,7 @@ struct ImageDimensions {
 pub struct WgpuTransformPayload {
     pub window_width: f32,
     pub window_height: f32,
+    pub device_pixel_ratio: f32,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -472,6 +475,7 @@ async fn update_wgpu_transform(
                 payload.clip_height,
             ];
             display.latest_transform.window = [payload.window_width, payload.window_height];
+            display.device_pixel_ratio = payload.device_pixel_ratio;
             display.latest_transform.bg_primary = payload.bg_primary;
             display.latest_transform.bg_secondary = payload.bg_secondary;
             display.latest_transform.pixelated = if payload.pixelated { 1.0 } else { 0.0 };
@@ -522,7 +526,14 @@ fn process_preview_job(
     let preview_dim = target_resolution.unwrap_or(default_preview_dim);
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     let use_wgpu_renderer = settings.use_wgpu_renderer.unwrap_or(true);
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(target_os = "linux")]
+    let use_wgpu_renderer = settings.use_wgpu_renderer.unwrap_or(false)
+        && context
+            .display
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some();
+    #[cfg(target_os = "android")]
     let use_wgpu_renderer = false;
 
     let has_roi = roi.is_some();
@@ -1917,7 +1928,9 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
         .plugin(PinchZoomDisablePlugin)
-        .on_window_event(|window, event| if let tauri::WindowEvent::Resized(size) = event {
+        // Linux sizes the swapchain at draw time instead (WgpuDisplay::fit_to_window).
+        .on_window_event(|window, event| if let tauri::WindowEvent::Resized(size) = event
+            && !cfg!(target_os = "linux") {
             let state = window.state::<AppState>();
             if let Some(ctx) = state.gpu_context.lock().unwrap().as_ref()
                 && let Ok(mut display_lock) = ctx.display.try_lock()

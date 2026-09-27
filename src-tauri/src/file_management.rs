@@ -37,8 +37,7 @@ use crate::image_loader;
 use crate::image_processing::GpuContext;
 use crate::image_processing::{
     Crop, ImageFlag, ImageMetadata, apply_coarse_rotation, apply_cpu_default_raw_processing,
-    apply_crop, apply_flip, apply_geometry_warp, apply_rotation, auto_results_to_json,
-    get_all_adjustments_from_json, perform_auto_analysis,
+    apply_crop, apply_flip, apply_geometry_warp, apply_rotation, get_all_adjustments_from_json,
 };
 use crate::mask_generation::MaskDefinition;
 use crate::preset_converter;
@@ -2953,13 +2952,29 @@ pub async fn apply_auto_adjustments_to_paths(
                 )
                 .map_err(|e| e.to_string())?;
 
-                let auto_results = perform_auto_analysis(&image);
-                let auto_adjustments_json = auto_results_to_json(&auto_results);
-
                 let mut existing_metadata = crate::exif_processing::load_sidecar(&sidecar_path);
 
                 if existing_metadata.adjustments.is_null() {
                     existing_metadata.adjustments = serde_json::json!({});
+                }
+
+                let mut auto_adjustments_json = crate::image_processing::auto_adjustments_json(
+                    &image,
+                    &source_path.to_string_lossy(),
+                    crate::formats::is_raw_file(&source_path),
+                    existing_metadata.adjustments["toneMapper"].as_str(),
+                    &app_handle,
+                );
+                if let Some(auto_map) = auto_adjustments_json.as_object_mut() {
+                    auto_map.remove("autoFaces");
+                    if let Some(serde_json::Value::Array(face_masks)) =
+                        auto_map.remove("faceLiftMasks")
+                    {
+                        crate::face_exposure::merge_face_masks(
+                            &mut existing_metadata.adjustments,
+                            &face_masks,
+                        );
+                    }
                 }
 
                 if let (Some(existing_map), Some(auto_map)) = (

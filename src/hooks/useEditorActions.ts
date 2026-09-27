@@ -74,12 +74,27 @@ export function useEditorActions() {
     const selectedImage = useEditorStore.getState().selectedImage;
     if (!selectedImage?.isReady) return;
     try {
-      const autoAdjustments: Adjustments = await invoke(Invokes.CalculateAutoAdjustments);
-      setAdjustments((prev: Adjustments) => ({
-        ...prev,
-        ...autoAdjustments,
-        sectionVisibility: { ...prev.sectionVisibility, ...autoAdjustments.sectionVisibility },
-      }));
+      const {
+        faceLiftMasks,
+        autoFaces: _autoFaces,
+        ...autoAdjustments
+      }: Adjustments & { faceLiftMasks?: any[]; autoFaces?: number } = await invoke(
+        Invokes.CalculateAutoAdjustments,
+        { toneMapper: useEditorStore.getState().adjustments.toneMapper },
+      );
+      setAdjustments((prev: Adjustments) => {
+        const next = {
+          ...prev,
+          ...autoAdjustments,
+          sectionVisibility: { ...prev.sectionVisibility, ...autoAdjustments.sectionVisibility },
+        };
+        if (faceLiftMasks) {
+          // Replace the face lifts from an earlier auto run; keep the user's own masks.
+          const ownMasks = (prev.masks || []).filter((m) => !m.id?.startsWith('auto-face-lift'));
+          next.masks = [...ownMasks, ...normalizeLoadedAdjustments({ masks: faceLiftMasks } as any).masks];
+        }
+        return next;
+      });
     } catch (err) {
       toast.error(`Failed to apply auto adjustments: ${err}`);
     }

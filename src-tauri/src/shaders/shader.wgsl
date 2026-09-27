@@ -1912,6 +1912,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var default_tonemapped: vec3<f32>;
     if (adjustments.global.tonemapper_mode == 1u) {
         default_tonemapped = agx_full_transform(composite_rgb_linear);
+    } else if (adjustments.global.tonemapper_mode == 2u && is_raw == 1u && camera_profile.flags.x == 1u) {
+        default_tonemapped = camera_profile_render(composite_rgb_linear);
     } else if (is_raw == 1u) {
         var srgb_emulated = linear_to_srgb(composite_rgb_linear);
         const BRIGHTNESS_GAMMA: f32 = 1.1;

@@ -596,6 +596,7 @@ export default function SettingsPanel({
     rawPreprocessingSharpening: appSettings?.rawPreprocessingSharpening ?? 0.35,
     applyPreprocessingToNonRaws: appSettings?.applyPreprocessingToNonRaws ?? false,
     useAppleRaw9: appSettings?.useAppleRaw9 ?? false,
+    useCameraProfiles: appSettings?.useCameraProfiles ?? false,
   });
   const [restartRequired, setRestartRequired] = useState(false);
   const [activeCategory, setActiveCategory] = useState('general');
@@ -705,6 +706,7 @@ export default function SettingsPanel({
       rawPreprocessingSharpening: appSettings?.rawPreprocessingSharpening ?? 0.35,
       applyPreprocessingToNonRaws: appSettings?.applyPreprocessingToNonRaws ?? false,
       useAppleRaw9: appSettings?.useAppleRaw9 ?? false,
+      useCameraProfiles: appSettings?.useCameraProfiles ?? false,
     });
     setRestartRequired(false);
   }, [appSettings]);
@@ -745,7 +747,8 @@ export default function SettingsPanel({
         key === 'rawPreprocessingColorNr' ||
         key === 'rawPreprocessingSharpening' ||
         key === 'applyPreprocessingToNonRaws' ||
-        key === 'useAppleRaw9'
+        key === 'useAppleRaw9' ||
+        key === 'useCameraProfiles'
       ) {
         await invoke('clear_image_caches');
       }
@@ -2320,6 +2323,18 @@ export default function SettingsPanel({
                           />
                         </SettingItem>
                       )}
+
+                      <SettingItem
+                        label={t('settings.processing.preprocessing.cameraProfiles')}
+                        description={t('settings.processing.preprocessing.cameraProfilesDesc')}
+                      >
+                        <Switch
+                          checked={processingSettings.useCameraProfiles}
+                          id="camera-profiles-toggle"
+                          label={t('settings.processing.preprocessing.enableCameraProfiles')}
+                          onChange={(checked) => handleProcessingSettingChange('useCameraProfiles', checked)}
+                        />
+                      </SettingItem>
 
                       <SettingItem
                         label={t('settings.processing.preprocessing.linearRaw')}

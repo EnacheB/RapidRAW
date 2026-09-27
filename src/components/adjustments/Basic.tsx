@@ -1,7 +1,10 @@
 import { motion } from 'framer-motion';
 import clsx from 'clsx';
+import { invoke } from '@tauri-apps/api/core';
 import Slider from '../ui/Slider';
+import { Invokes } from '../ui/AppProperties';
 import { Adjustments, BasicAdjustment } from '../../utils/adjustments';
+import { useEditorStore } from '../../store/useEditorStore';
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -32,9 +35,24 @@ const ToneMapperSwitch = ({
   const [bubbleStyle, setBubbleStyle] = useState({});
   const isInitialAnimation = useRef(true);
   const [isLabelHovered, setIsLabelHovered] = useState(false);
+  const imagePath = useEditorStore((s) => s.selectedImage?.path);
+  const [profileName, setProfileName] = useState<string | null>(null);
 
-  const toneMapperOptions = useMemo(
-    () => [
+  useEffect(() => {
+    let cancelled = false;
+    setProfileName(null);
+    if (imagePath) {
+      invoke<string | null>(Invokes.GetCameraProfileName, { path: imagePath })
+        .then((name) => !cancelled && setProfileName(name))
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [imagePath]);
+
+  const toneMapperOptions = useMemo(() => {
+    const options = [
       {
         id: 'basic',
         label: t('adjustments.basic.mappers.basic'),
@@ -45,9 +63,16 @@ const ToneMapperSwitch = ({
         label: t('adjustments.basic.mappers.agx'),
         title: t('adjustments.basic.mappers.agxDesc'),
       },
-    ],
-    [t],
-  );
+    ];
+    if (profileName || selectedMapper === 'profile') {
+      options.push({
+        id: 'profile',
+        label: t('adjustments.basic.mappers.profile'),
+        title: profileName ?? t('adjustments.basic.mappers.profileDesc'),
+      });
+    }
+    return options;
+  }, [t, profileName, selectedMapper]);
 
   const handleReset = () => {
     onMapperChange('basic');
@@ -171,7 +196,7 @@ export default function BasicAdjustments({
   const handleToneMapperChange = (mapper: string) => {
     setAdjustments((prev: Partial<Adjustments>) => ({
       ...prev,
-      toneMapper: mapper as 'basic' | 'agx',
+      toneMapper: mapper as Adjustments['toneMapper'],
     }));
   };
 

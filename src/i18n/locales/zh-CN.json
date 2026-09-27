@@ -10,7 +10,9 @@
         "agx": "AgX",
         "agxDesc": "电影感色调映射",
         "basic": "基础",
-        "basicDesc": "标准色调映射"
+        "basicDesc": "标准色调映射",
+        "profile": "配置文件",
+        "profileDesc": "相机配置文件"
       },
       "reset": "重置",
       "shadows": "阴影",
@@ -1846,6 +1848,8 @@
         "appleRaw9Desc": "使用 Apple 的 Core Image RAW 9 解码器冲洗 RAW 文件。它在神经网络引擎 (Neural Engine) 上一步完成去马赛克和降噪。需要 macOS 27 或更高版本以及支持的相机；不支持的文件将自动使用内置解码器。比默认解码器慢。缩略图不受影响。",
         "applyPreprocessing": "对非 RAW 图像应用预处理",
         "applyPreprocessingDesc": "如果启用，上述基础颜色降噪和预锐化也将应用于标准格式。",
+        "cameraProfiles": "相机配置文件",
+        "cameraProfilesDesc": "使用相机的 DNG 相机配置文件 (.dcp) 而非通用矩阵来冲洗 RAW 文件的色彩。配置文件按相机型号依次在应用数据目录的 camera_profiles 文件夹、RawTherapee 和 ART 的配置文件夹中查找。有配置文件的相机还可使用“配置文件”色调映射，应用其色调曲线和风格。",
         "colorNr": "基础颜色降噪",
         "colorNrDesc": "在管线早期应用交叉双边滤波器以去除彩色噪点。值越高 = 降噪越强。",
         "defaultNonRawTonemapper": "默认非 RAW 色调映射",
@@ -1853,6 +1857,7 @@
         "defaultRawTonemapper": "默认 RAW 色调映射",
         "defaultRawTonemapperDesc": "应用于 RAW 图像的色调映射器。",
         "enableAppleRaw9": "对 RAW 文件使用 Apple RAW 9",
+        "enableCameraProfiles": "对 RAW 文件使用相机配置文件",
         "enablePreprocessingNonRaws": "对非 RAW 图像启用",
         "enableTonemapperOverride": "启用色调映射覆盖",
         "highlightRecovery": "RAW 高光恢复",

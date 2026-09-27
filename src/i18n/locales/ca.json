@@ -10,7 +10,9 @@
         "agx": "AgX",
         "agxDesc": "Mapeig de tons tipus pel·lícula",
         "basic": "Bàsic",
-        "basicDesc": "Mapeig de tons estàndard"
+        "basicDesc": "Mapeig de tons estàndard",
+        "profile": "Perfil",
+        "profileDesc": "Perfil de càmera"
       },
       "reset": "Restablir",
       "shadows": "Ombres",
@@ -1850,6 +1852,8 @@
         "appleRaw9Desc": "Revela els fitxers RAW amb el descodificador RAW 9 de Core Image d'Apple, que realitza el procés de demosaic i reducció de soroll en un sol pas al Neural Engine. Requereix macOS 27 o posterior i una càmera compatible; els fitxers no compatibles utilitzen automàticament el descodificador integrat. Més lent que el descodificador per defecte. Les miniatures no es veuen afectades.",
         "applyPreprocessing": "Aplicar preprocessament als No-RAW",
         "applyPreprocessingDesc": "Si està activat, la reducció del soroll de color base i la pre-nitidesa esmentades abans també s'aplicaran als formats estàndard.",
+        "cameraProfiles": "Perfils de càmera",
+        "cameraProfilesDesc": "Revela els colors dels fitxers RAW amb el perfil DNG de la càmera (.dcp) en lloc d'una matriu genèrica. Els perfils es cerquen pel model de càmera a la carpeta camera_profiles del directori de dades de l'aplicació i després a les carpetes de perfils de RawTherapee i ART. Les càmeres amb perfil també tenen el mapejador de tons «Perfil», amb la seva corba tonal i el seu aspecte.",
         "colorNr": "Reducció de soroll de color base",
         "colorNrDesc": "Aplica un filtre bilateral creuat d'hora a la canonada per eliminar el soroll de croma. Valor més alt = Més reducció.",
         "defaultNonRawTonemapper": "Mapejador de tons predeterminat No-RAW",
@@ -1857,6 +1861,7 @@
         "defaultRawTonemapper": "Mapejador de tons predeterminat RAW",
         "defaultRawTonemapperDesc": "El mapejador de tons a aplicar a les imatges RAW.",
         "enableAppleRaw9": "Utilitza Apple RAW 9 per als fitxers RAW",
+        "enableCameraProfiles": "Utilitza perfils de càmera per als fitxers RAW",
         "enablePreprocessingNonRaws": "Activar per a No-RAW",
         "enableTonemapperOverride": "Activar la sobreescriptura del mapejador de tons",
         "highlightRecovery": "Recuperació de llums altes RAW",

@@ -1731,6 +1731,8 @@ pub fn generate_thumbnail_data(
         meta.adjustments.to_string().hash(&mut hasher);
         let unique_hash = hasher.finish();
 
+        let camera_profile =
+            crate::camera_profile::for_render(path_str, &gpu_adjustments, &settings);
         if let Ok(processed_image) = gpu_processing::process_and_get_dynamic_image(
             context,
             &state,
@@ -1741,6 +1743,7 @@ pub fn generate_thumbnail_data(
                 mask_bitmaps: &mask_bitmaps,
                 lut,
                 roi: None,
+                camera_profile,
             },
             "generate_thumbnail_data",
         ) {

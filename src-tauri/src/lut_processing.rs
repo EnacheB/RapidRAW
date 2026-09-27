@@ -641,6 +641,7 @@ fn render_lut_swatch(
             mask_bitmaps: &[],
             lut: Some(lut),
             roi: None,
+            camera_profile: None,
         },
         "generate_lut_previews",
     )

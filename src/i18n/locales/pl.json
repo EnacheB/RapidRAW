@@ -10,7 +10,9 @@
         "agx": "AgX",
         "agxDesc": "Mapowanie tonów w stylu filmowym",
         "basic": "Podstawowe",
-        "basicDesc": "Standardowe mapowanie tonów"
+        "basicDesc": "Standardowe mapowanie tonów",
+        "profile": "Profil",
+        "profileDesc": "Profil aparatu"
       },
       "reset": "Resetuj",
       "shadows": "Cienie",
@@ -1920,6 +1922,8 @@
         "appleRaw9Desc": "Wywołuj pliki RAW za pomocą dekodera RAW 9 w Core Image od Apple, który przeprowadza demozaikowanie i odszumianie w jednym kroku w silniku Neural Engine. Wymaga systemu macOS 27 lub nowszego oraz obsługiwanego aparatu; nieobsługiwane pliki automatycznie korzystają z wbudowanego dekodera. Wolniejszy niż domyślny dekoder. Nie wpływa na miniatury.",
         "applyPreprocessing": "Zastosuj wstępne przetwarzanie do formatów innych niż RAW",
         "applyPreprocessingDesc": "Jeśli włączone, redukcja szumu kolorów i wstępne wyostrzanie powyżej zostaną również zastosowane do standardowych formatów.",
+        "cameraProfiles": "Profile aparatów",
+        "cameraProfilesDesc": "Wywołuje kolory plików RAW przy użyciu profilu DNG aparatu (.dcp) zamiast ogólnej macierzy. Profile są wyszukiwane według modelu aparatu w folderze camera_profiles katalogu danych aplikacji, a następnie w folderach profili RawTherapee i ART. Aparaty z profilem mają też mapowanie tonów „Profil” z jego krzywą tonalną i wyglądem.",
         "colorNr": "Bazowa redukcja szumu koloru",
         "colorNrDesc": "Stosuje filtr na wczesnym etapie w celu usunięcia szumu koloru (Chroma). Wyższa wartość = Silniejsza redukcja szumów.",
         "defaultNonRawTonemapper": "Domyślne mapowanie tonów (Non-RAW)",
@@ -1927,6 +1931,7 @@
         "defaultRawTonemapper": "Domyślne mapowanie tonów (RAW)",
         "defaultRawTonemapperDesc": "Mapowanie tonów aplikowane do obrazów RAW.",
         "enableAppleRaw9": "Używaj Apple RAW 9 dla plików RAW",
+        "enableCameraProfiles": "Używaj profili aparatów dla plików RAW",
         "enablePreprocessingNonRaws": "Włącz dla innych niż RAW",
         "enableTonemapperOverride": "Włącz nadpisywanie mapowania tonów",
         "highlightRecovery": "Odzyskiwanie świateł w RAW",

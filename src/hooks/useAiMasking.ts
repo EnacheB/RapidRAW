@@ -73,7 +73,7 @@ export function useAiMasking() {
   );
 
   const handleDirectPatch = useCallback(
-    async (subMaskId: string, sourceX: number, sourceY: number) => {
+    async (subMaskId: string, sourceX?: number, sourceY?: number) => {
       const { selectedImage, adjustments, patchesSentToBackend } = useEditorStore.getState();
       if (!selectedImage?.path) return;
 
@@ -101,16 +101,28 @@ export function useAiMasking() {
         const newPatchDataJson: any = await invoke(command, {
           currentAdjustments: adjustments,
           patchDefinition: patchDefinitionForBackend,
-          sourcePoint: [sourceX, sourceY],
+          // Without a source, Clone/Heal pick one and return it as `sourcePoint`.
+          sourcePoint: sourceX === undefined || sourceY === undefined ? null : [sourceX, sourceY],
         });
 
-        const newPatchData = JSON.parse(newPatchDataJson);
+        const { sourcePoint, ...newPatchData } = JSON.parse(newPatchDataJson);
         patchesSentToBackend.delete(patchId);
+
+        // Keep a picked source unless the user set one while this patch was generating.
+        const withPickedSource = (sm: SubMask) =>
+          sourcePoint && sm.id === subMaskId && (sm.parameters?.sourceX === undefined || sm.parameters?.autoSource)
+            ? {
+                ...sm,
+                parameters: { ...sm.parameters, sourceX: sourcePoint[0], sourceY: sourcePoint[1], autoSource: true },
+              }
+            : sm;
 
         setAdjustments((prev: Partial<Adjustments>) => ({
           ...prev,
           aiPatches: prev.aiPatches?.map((p: AiPatch) =>
-            p.id === patchId ? { ...p, patchData: newPatchData, isLoading: false } : p,
+            p.id === patchId
+              ? { ...p, subMasks: p.subMasks.map(withPickedSource), patchData: newPatchData, isLoading: false }
+              : p,
           ),
         }));
       } catch (err: any) {

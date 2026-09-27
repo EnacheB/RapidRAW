@@ -690,7 +690,7 @@
       "tooltips": {
         "addToCurrent": "Add {{name}} to Current Mask or Create New (Right-click)",
         "createNew": "Create New {{name}} Mask",
-        "selectNewSourcePoint": "{{modifier}} + Click to select a new source point"
+        "selectNewSourcePoint": "Drag to move the source, or {{modifier}} + Click to place it"
       }
     },
     "metadata": {

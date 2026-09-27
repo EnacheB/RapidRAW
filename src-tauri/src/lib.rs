@@ -47,6 +47,7 @@ mod formats;
 mod gpu_processing;
 mod guided_perspective;
 mod hdr_deghosting;
+mod heal_source;
 mod image_loader;
 mod image_processing;
 mod inpainting;

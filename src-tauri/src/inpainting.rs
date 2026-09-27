@@ -113,7 +113,7 @@ fn encode_patch_result(
     is_srgb: bool,
     quality: u8,
     mask_as_png: bool,
-) -> Result<String, String> {
+) -> Result<Value, String> {
     let mut color_buf = Cursor::new(Vec::with_capacity(32768));
     color_image
         .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
@@ -146,8 +146,7 @@ fn encode_patch_result(
         "width": width,
         "height": height,
         "isSrgbEncoded": is_srgb
-    })
-    .to_string();
+    });
 
     Ok(result_json)
 }
@@ -156,11 +155,11 @@ fn encode_patch_result(
 pub async fn generate_manual_cleanup_patch(
     patch_definition: AiPatchDefinition,
     current_adjustments: Value,
-    source_point: (f64, f64),
+    source_point: Option<(f64, f64)>,
     _task_id: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    let (source_image, is_raw) =
+    let (source_image, _) =
         prepare_source_image(&patch_definition.id, &current_adjustments, &state)?;
     let (img_w, img_h) = source_image.dimensions();
 
@@ -208,17 +207,6 @@ pub async fn generate_manual_cleanup_patch(
     let center_x = (min_x + max_x) as f64 / 2.0;
     let center_y = (min_y + max_y) as f64 / 2.0;
 
-    let source_point_untransformed = crate::image_processing::inverse_transform_point(
-        source_point.0,
-        source_point.1,
-        trans_w as f64,
-        trans_h as f64,
-        &current_adjustments,
-    );
-
-    let offset_x = (source_point_untransformed.0 - center_x).round() as i32;
-    let offset_y = (source_point_untransformed.1 - center_y).round() as i32;
-
     let min_x_u32 = min_x as u32;
     let min_y_u32 = min_y as u32;
     let crop_w = (max_x - min_x + 1) as u32;
@@ -240,131 +228,65 @@ pub async fn generate_manual_cleanup_patch(
         is_heal = true;
     }
 
-    let mut color_image = RgbImage::new(crop_w, crop_h);
-
-    if !is_heal {
-        for y in min_y..=max_y {
-            for x in min_x..=max_x {
-                let px_x = x as u32;
-                let px_y = y as u32;
-                if mask_bitmap.get_pixel(px_x, px_y)[0] > 0 {
-                    let src_x = (px_x as i32 + offset_x).clamp(0, img_w as i32 - 1) as u32;
-                    let src_y = (px_y as i32 + offset_y).clamp(0, img_h as i32 - 1) as u32;
-                    let src_px = source_image.get_pixel(src_x, src_y);
-
-                    let dest_x = px_x - min_x_u32;
-                    let dest_y = px_y - min_y_u32;
-                    color_image.put_pixel(dest_x, dest_y, Rgb([src_px[0], src_px[1], src_px[2]]));
-                }
-            }
+    // Without a source point, pick one and return it (in the frontend's transformed
+    // coordinates) so it is stored with the edit and shown on the canvas.
+    let (offset_x, offset_y, picked_source) = match source_point {
+        Some((x, y)) => {
+            let (ux, uy) = crate::image_processing::inverse_transform_point(
+                x,
+                y,
+                trans_w as f64,
+                trans_h as f64,
+                &current_adjustments,
+            );
+            let offset_x = (ux - center_x).round() as i32;
+            let offset_y = (uy - center_y).round() as i32;
+            (offset_x, offset_y, None)
         }
-    } else {
-        let bw = max_x - min_x + 3;
-        let bh = max_y - min_y + 3;
-
-        let mut v_r = vec![0.0f32; bw * bh];
-        let mut v_g = vec![0.0f32; bw * bh];
-        let mut v_b = vec![0.0f32; bw * bh];
-
-        let mut region = vec![0u8; bw * bh];
-
-        for y in 0..bh {
-            for x in 0..bw {
-                let img_x = min_x as i32 + x as i32 - 1;
-                let img_y = min_y as i32 + y as i32 - 1;
-
-                if img_x >= 0
-                    && img_x < img_w as i32
-                    && img_y >= 0
-                    && img_y < img_h as i32
-                    && mask_bitmap.get_pixel(img_x as u32, img_y as u32)[0] > 0
-                {
-                    region[y * bw + x] = 1;
-                }
-            }
+        None => {
+            let (offset_x, offset_y) = crate::heal_source::find_source_offset(
+                &source_image,
+                &mask_bitmap,
+                (min_x, max_x, min_y, max_y),
+                is_heal,
+            )
+            .ok_or_else(|| {
+                let modifier = if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" };
+                format!("Couldn't find a clean area nearby to copy from. {modifier}+click to choose one.")
+            })?;
+            let picked = crate::image_processing::transform_point(
+                center_x + offset_x as f64,
+                center_y + offset_y as f64,
+                trans_w as f64,
+                trans_h as f64,
+                &current_adjustments,
+            );
+            (offset_x, offset_y, Some(picked))
         }
+    };
 
-        let mut omega_coords = Vec::with_capacity(bw * bh);
-
-        for y in 1..(bh - 1) {
-            for x in 1..(bw - 1) {
-                if region[y * bw + x] == 0 {
-                    if region[(y - 1) * bw + x] == 1
-                        || region[(y + 1) * bw + x] == 1
-                        || region[y * bw + x - 1] == 1
-                        || region[y * bw + x + 1] == 1
-                    {
-                        region[y * bw + x] = 2;
-
-                        let img_x = (min_x as i32 + x as i32 - 1) as u32;
-                        let img_y = (min_y as i32 + y as i32 - 1) as u32;
-
-                        let src_x = (img_x as i32 + offset_x).clamp(0, img_w as i32 - 1) as u32;
-                        let src_y = (img_y as i32 + offset_y).clamp(0, img_h as i32 - 1) as u32;
-
-                        let dest_px = source_image.get_pixel(img_x, img_y);
-                        let src_px = source_image.get_pixel(src_x, src_y);
-
-                        v_r[y * bw + x] = dest_px[0] as f32 - src_px[0] as f32;
-                        v_g[y * bw + x] = dest_px[1] as f32 - src_px[1] as f32;
-                        v_b[y * bw + x] = dest_px[2] as f32 - src_px[2] as f32;
-                    }
-                } else if region[y * bw + x] == 1 {
-                    omega_coords.push((x, y));
-                }
-            }
-        }
-
-        let omega = 1.6f32;
-        let iterations = 400;
-
-        for _ in 0..iterations {
-            for &(x, y) in &omega_coords {
-                let idx = y * bw + x;
-                let sum_r = v_r[idx - bw] + v_r[idx + bw] + v_r[idx - 1] + v_r[idx + 1];
-                let sum_g = v_g[idx - bw] + v_g[idx + bw] + v_g[idx - 1] + v_g[idx + 1];
-                let sum_b = v_b[idx - bw] + v_b[idx + bw] + v_b[idx - 1] + v_b[idx + 1];
-
-                v_r[idx] = (1.0 - omega) * v_r[idx] + omega * 0.25 * sum_r;
-                v_g[idx] = (1.0 - omega) * v_g[idx] + omega * 0.25 * sum_g;
-                v_b[idx] = (1.0 - omega) * v_b[idx] + omega * 0.25 * sum_b;
-            }
-        }
-        for &(x, y) in &omega_coords {
-            let img_x = (min_x as i32 + x as i32 - 1) as u32;
-            let img_y = (min_y as i32 + y as i32 - 1) as u32;
-
-            let src_x = (img_x as i32 + offset_x).clamp(0, img_w as i32 - 1) as u32;
-            let src_y = (img_y as i32 + offset_y).clamp(0, img_h as i32 - 1) as u32;
-            let src_px = source_image.get_pixel(src_x, src_y);
-
-            let idx = y * bw + x;
-            let out_r = (src_px[0] as f32 + v_r[idx]).clamp(0.0, 255.0) as u8;
-            let out_g = (src_px[1] as f32 + v_g[idx]).clamp(0.0, 255.0) as u8;
-            let out_b = (src_px[2] as f32 + v_b[idx]).clamp(0.0, 255.0) as u8;
-
-            let out_x = img_x as i32 - min_x as i32;
-            let out_y = img_y as i32 - min_y as i32;
-            if out_x >= 0 && out_x < crop_w as i32 && out_y >= 0 && out_y < crop_h as i32 {
-                color_image.put_pixel(out_x as u32, out_y as u32, Rgb([out_r, out_g, out_b]));
-            }
-        }
-    }
-
+    // Store the recipe, not pixels: composite_patches_on_image renders the spot
+    // from the float image (heal_source::render_spot), so nothing is clipped or
+    // quantised.
     let output_mask =
         image::imageops::crop_imm(&mask_bitmap, min_x_u32, min_y_u32, crop_w, crop_h).to_image();
-
-    encode_patch_result(
-        &color_image,
-        &output_mask,
-        min_x_u32,
-        min_y_u32,
-        crop_w,
-        crop_h,
-        is_raw,
-        100,
-        false,
-    )
+    let mut mask_png = Cursor::new(Vec::new());
+    output_mask
+        .write_to(&mut mask_png, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    let mut result = serde_json::json!({
+        "mask": general_purpose::STANDARD.encode(mask_png.get_ref()),
+        "offsetX": min_x_u32,
+        "offsetY": min_y_u32,
+        "width": crop_w,
+        "height": crop_h,
+        "sourceOffset": [offset_x, offset_y],
+        "heal": is_heal,
+    });
+    if let Some((x, y)) = picked_source {
+        result["sourcePoint"] = serde_json::json!([x, y]);
+    }
+    Ok(result.to_string())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -679,6 +601,7 @@ pub async fn invoke_generative_replace_with_mask_def(
         95,
         true,
     )
+    .map(|v| v.to_string())
 }
 
 fn point_to_segment_dist_sq(px: f32, py: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> (f32, f32) {
@@ -1061,6 +984,7 @@ pub async fn generate_liquify_patch(
         100,
         false,
     )
+    .map(|v| v.to_string())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1373,4 +1297,5 @@ pub async fn generate_retouch_patch(
         100,
         false,
     )
+    .map(|v| v.to_string())
 }

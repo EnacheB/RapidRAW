@@ -57,6 +57,13 @@ fn hash_ai_patches(adjustments: &serde_json::Value, hasher: &mut DefaultHasher) 
                     .unwrap_or("")
                     .len();
                 mask_len.hash(hasher);
+
+                // Heal/Clone spots are rendered from their recipe; moving the source
+                // changes the result without changing the mask.
+                if let Some(recipe) = patch_data.get("sourceOffset") {
+                    recipe.to_string().hash(hasher);
+                    patch_data.get("heal").map(|v| v.to_string()).hash(hasher);
+                }
             } else {
                 let data_len = patch
                     .get("patchDataBase64")

@@ -1180,6 +1180,38 @@ pub fn inverse_transform_point(
     (x, y)
 }
 
+/// The inverse of `inverse_transform_point`: maps a point on the original image
+/// to the transformed image the frontend draws on. Solved numerically (Newton's
+/// method with a finite-difference Jacobian), which is exact after one step for
+/// the affine part and converges quickly under lens correction.
+pub fn transform_point(
+    x: f64,
+    y: f64,
+    curr_w: f64,
+    curr_h: f64,
+    adjustments: &serde_json::Value,
+) -> (f64, f64) {
+    let f = |px: f64, py: f64| inverse_transform_point(px, py, curr_w, curr_h, adjustments);
+    let (mut px, mut py) = (curr_w / 2.0, curr_h / 2.0);
+    for _ in 0..10 {
+        let (fx, fy) = f(px, py);
+        let (ex, ey) = (x - fx, y - fy);
+        if ex.abs() < 0.01 && ey.abs() < 0.01 {
+            break;
+        }
+        let (ax, ay) = f(px + 1.0, py);
+        let (bx, by) = f(px, py + 1.0);
+        let (j00, j10, j01, j11) = (ax - fx, ay - fy, bx - fx, by - fy);
+        let det = j00 * j11 - j01 * j10;
+        if det.abs() < 1e-9 {
+            break;
+        }
+        px += (j11 * ex - j01 * ey) / det;
+        py += (j00 * ey - j10 * ex) / det;
+    }
+    (px, py)
+}
+
 pub fn apply_cpu_default_raw_processing(image: &mut DynamicImage) {
     let mut f32_image = image.to_rgb32f();
 

@@ -37,6 +37,8 @@ mod culling;
 mod denoising;
 mod effect_maps;
 mod exif_processing;
+#[doc(hidden)]
+pub mod face_exposure;
 mod export_processing;
 mod file_management;
 mod focus_stacking;

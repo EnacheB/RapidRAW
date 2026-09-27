@@ -3560,22 +3560,48 @@ pub fn auto_results_to_json(results: &AutoAdjustmentResults) -> serde_json::Valu
     })
 }
 
+/// Auto adjustments, with exposure driven by faces when there are any.
+/// `adjustments` are the image's current ones: their tone mapper decides how
+/// faces are metered and their geometry where the face masks go.
+pub fn auto_adjustments_json(
+    image: &DynamicImage,
+    path: &str,
+    is_raw: bool,
+    adjustments: &serde_json::Value,
+    app_handle: &tauri::AppHandle,
+) -> serde_json::Value {
+    let mut auto = auto_results_to_json(&perform_auto_analysis(image));
+    let settings = crate::app_settings::load_settings(app_handle.clone()).unwrap_or_default();
+    let mode = resolve_tonemapper_override(&settings, is_raw)
+        .unwrap_or_else(|| tonemapper_mode(adjustments["toneMapper"].as_str().unwrap_or("basic")));
+    let tm = crate::face_exposure::ToneMapper::new(mode, path, &settings);
+    if let Some(faces) = crate::face_exposure::analyze(image, is_raw, &tm) {
+        crate::face_exposure::apply_to_auto_json(&faces, &mut auto, adjustments);
+    }
+    auto
+}
+
 #[tauri::command]
-pub fn calculate_auto_adjustments(
-    state: tauri::State<AppState>,
+pub async fn calculate_auto_adjustments(
+    js_adjustments: serde_json::Value,
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
-    let original_image = state
-        .original_image
-        .lock()
-        .unwrap()
-        .as_ref()
-        .ok_or("No image loaded for auto adjustments")?
-        .image
-        .clone();
+    let (original_image, path, is_raw) = {
+        let guard = state.original_image.lock().unwrap();
+        let loaded = guard
+            .as_ref()
+            .ok_or("No image loaded for auto adjustments")?;
+        (loaded.image.clone(), loaded.path.clone(), loaded.is_raw)
+    };
 
-    let results = perform_auto_analysis(&original_image);
-
-    Ok(auto_results_to_json(&results))
+    Ok(auto_adjustments_json(
+        &original_image,
+        &path,
+        is_raw,
+        &js_adjustments,
+        &app_handle,
+    ))
 }
 
 #[derive(Deserialize, Clone, Copy)]

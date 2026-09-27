@@ -2,8 +2,6 @@ struct Transform {
     rect: vec4<f32>,
     clip: vec4<f32>,
     window: vec2<f32>,
-    image_size: vec2<f32>,
-    texture_size: vec2<f32>,
     pixelated: f32,
     _pad: f32,
     bg_primary: vec4<f32>,
@@ -58,20 +56,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return transform.bg_secondary;
     }
 
-    let adjusted_uv = in.uv * (transform.image_size / transform.texture_size);
-    let half_texel = vec2<f32>(0.5, 0.5) / transform.texture_size;
-
-    let min_uv = half_texel;
-    let max_uv = (transform.image_size / transform.texture_size) - half_texel;
-
+    let size = textureDimensions(tex);
     if (transform.pixelated > 0.5) {
-        let texel_coords = floor(adjusted_uv * transform.texture_size);
-        let nearest_uv = (texel_coords + vec2<f32>(0.5, 0.5)) / transform.texture_size;
-
-        let clamped_nearest = clamp(nearest_uv, min_uv, max_uv);
-        return textureSample(tex, samp, clamped_nearest);
-    } else {
-        let clamped_uv = clamp(adjusted_uv, min_uv, max_uv);
-        return textureSample(tex, samp, clamped_uv);
+        let texel = min(vec2<u32>(in.uv * vec2<f32>(size)), size - 1u);
+        return textureLoad(tex, texel, 0);
     }
+
+    // The texture is the whole photo at full resolution, with mips. Read the finest mip
+    // that is at most twice the size on screen, where a screen pixel covers `footprint`
+    // (1 to 2) texels. A bilinear tap averages a 1-texel box, so two taps per axis, set
+    // (footprint - 1) / 2 texels apart from the centre, average the pixel's whole
+    // footprint: zoomed-out views are neither blurry nor aliased, and 1:1 stays exact.
+    let texels_per_pixel = max(f32(size.x) / transform.rect.z, f32(size.y) / transform.rect.w);
+    let level = floor(log2(max(texels_per_pixel, 1.0)));
+    let footprint = max(texels_per_pixel / exp2(level), 1.0);
+    let offset = (footprint - 1.0) / (2.0 * footprint) / transform.rect.zw;
+    var color = vec4<f32>(0.0);
+    for (var y = -1.0; y <= 1.0; y += 2.0) {
+        for (var x = -1.0; x <= 1.0; x += 2.0) {
+            color += textureSampleLevel(tex, samp, in.uv + vec2<f32>(x, y) * offset, level);
+        }
+    }
+    return color / 4.0;
 }

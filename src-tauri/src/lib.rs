@@ -180,6 +180,21 @@ pub fn generate_transformed_preview(
     adjustments: &serde_json::Value,
     preview_dim: u32,
 ) -> Result<(DynamicImage, f32, (f32, f32)), String> {
+    let (preview, scale_for_gpu, unscaled_crop_offset) =
+        get_transformed_preview(state, loaded_image, adjustments, preview_dim)?;
+    Ok(((*preview).clone(), scale_for_gpu, unscaled_crop_offset))
+}
+
+/// The photo with its patches, geometry and spatial effects applied, at most
+/// `preview_dim` on its long side (`u32::MAX`: full resolution, for the direct
+/// display), with the scale the GPU should use and the crop's offset. Cached
+/// until any of them changes.
+fn get_transformed_preview(
+    state: &tauri::State<AppState>,
+    loaded_image: &LoadedImage,
+    adjustments: &serde_json::Value,
+    preview_dim: u32,
+) -> Result<TransformedPreview, String> {
     let mut hasher = DefaultHasher::new();
     loaded_image.path.hash(&mut hasher);
     calculate_transform_hash(adjustments).hash(&mut hasher);
@@ -194,7 +209,7 @@ pub fn generate_transformed_preview(
     if let Some((hash, img, scale, offset)) = cache_lock.as_ref()
         && *hash == cache_key
     {
-        return Ok(((**img).clone(), *scale, *offset));
+        return Ok((Arc::clone(img), *scale, *offset));
     }
 
     let (preview, scale_for_gpu, unscaled_crop_offset) =
@@ -206,7 +221,7 @@ pub fn generate_transformed_preview(
         unscaled_crop_offset,
     ));
 
-    Ok(((*preview).clone(), scale_for_gpu, unscaled_crop_offset))
+    Ok((preview, scale_for_gpu, unscaled_crop_offset))
 }
 
 fn get_or_compute_stage(
@@ -479,12 +494,6 @@ async fn update_wgpu_transform(
             display.latest_transform.bg_primary = payload.bg_primary;
             display.latest_transform.bg_secondary = payload.bg_secondary;
             display.latest_transform.pixelated = if payload.pixelated { 1.0 } else { 0.0 };
-
-            context.queue.write_buffer(
-                &display.transform_buffer,
-                0,
-                bytemuck::bytes_of(&display.latest_transform),
-            );
             display.render(&context.device, &context.queue);
         }
     })
@@ -492,6 +501,101 @@ async fn update_wgpu_transform(
     .map_err(|e| format!("Task panicked: {}", e))?;
 
     Ok(())
+}
+
+/// The image the JPEG preview renders: the photo at `preview_dim`, or smaller while
+/// dragging. Returns it with its scale and the crop's unscaled offset.
+fn jpeg_preview_image(
+    state: &tauri::State<AppState>,
+    loaded_image: &LoadedImage,
+    adjustments_clone: &serde_json::Value,
+    new_transform_hash: u64,
+    preview_dim: u32,
+    interactive_divisor: f32,
+    is_interactive: bool,
+) -> Result<(Arc<DynamicImage>, f32, (f32, f32)), String> {
+    let mut cached_preview_lock = state
+        .cached_preview
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let base_valid = cached_preview_lock
+        .as_ref()
+        .is_some_and(|c| c.transform_hash == new_transform_hash && c.preview_dim == preview_dim);
+    let small_valid = base_valid
+        && cached_preview_lock
+            .as_ref()
+            .is_some_and(|c| c.interactive_divisor == interactive_divisor);
+
+    let (final_preview_base, scale_for_gpu, unscaled_crop_offset) = if base_valid {
+        let cached = cached_preview_lock.as_ref().unwrap();
+        (
+            Arc::clone(&cached.image),
+            cached.scale,
+            cached.unscaled_crop_offset,
+        )
+    } else {
+        *state
+            .gpu_image_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+
+        get_transformed_preview(state, loaded_image, adjustments_clone, preview_dim)?
+    };
+
+    let small_preview_base = if small_valid {
+        Arc::clone(&cached_preview_lock.as_ref().unwrap().small_image)
+    } else {
+        let small = if interactive_divisor > 1.0 {
+            let target_size = (preview_dim as f32 / interactive_divisor) as u32;
+            let (w, h) = final_preview_base.dimensions();
+            let (small_w, small_h) = if w > h {
+                let ratio = h as f32 / w as f32;
+                (target_size, (target_size as f32 * ratio) as u32)
+            } else {
+                let ratio = w as f32 / h as f32;
+                ((target_size as f32 * ratio) as u32, target_size)
+            };
+            Arc::new(image_processing::downscale_f32_image(
+                &final_preview_base,
+                small_w,
+                small_h,
+            ))
+        } else {
+            Arc::clone(&final_preview_base)
+        };
+
+        if is_interactive && base_valid {
+            *state
+                .gpu_image_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = None;
+        }
+
+        small
+    };
+
+    *cached_preview_lock = Some(CachedPreview {
+        image: Arc::clone(&final_preview_base),
+        small_image: Arc::clone(&small_preview_base),
+        transform_hash: new_transform_hash,
+        scale: scale_for_gpu,
+        unscaled_crop_offset,
+        preview_dim,
+        interactive_divisor,
+    });
+
+    drop(cached_preview_lock);
+
+    if is_interactive {
+        let orig_w = final_preview_base.width() as f32;
+        let small_w = small_preview_base.width() as f32;
+        let scale_factor = if orig_w > 0.0 { small_w / orig_w } else { 1.0 };
+        let new_scale = scale_for_gpu * scale_factor;
+        Ok((small_preview_base, new_scale, unscaled_crop_offset))
+    } else {
+        Ok((final_preview_base, scale_for_gpu, unscaled_crop_offset))
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -543,94 +647,33 @@ fn process_preview_job(
         _ => (if has_roi { 1.4_f32 } else { 1.0_f32 }, 75_u8),
     };
 
-    let mut cached_preview_lock = state
-        .cached_preview
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-
-    let base_valid = cached_preview_lock
-        .as_ref()
-        .is_some_and(|c| c.transform_hash == new_transform_hash && c.preview_dim == preview_dim);
-    let small_valid = base_valid
-        && cached_preview_lock
-            .as_ref()
-            .is_some_and(|c| c.interactive_divisor == interactive_divisor);
-
-    let (final_preview_base, scale_for_gpu, unscaled_crop_offset) = if base_valid {
-        let cached = cached_preview_lock.as_ref().unwrap();
-        (
-            Arc::clone(&cached.image),
-            cached.scale,
-            cached.unscaled_crop_offset,
-        )
+    // Direct display renders the whole photo at full resolution; zooming and panning only
+    // choose which of its mips to draw. The JPEG path renders what the frontend asks for.
+    let direct_display_image = if use_wgpu_renderer {
+        let (image, _, crop_offset) =
+            get_transformed_preview(&state, &loaded_image, &adjustments_clone, u32::MAX)?;
+        let max_dim = context.limits.max_texture_dimension_2d;
+        (image.width().max(image.height()) <= max_dim).then_some((image, crop_offset))
     } else {
-        *state
-            .gpu_image_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
-
-        let (base, scale, offset) =
-            generate_transformed_preview(&state, &loaded_image, &adjustments_clone, preview_dim)?;
-        (Arc::new(base), scale, offset)
+        None
     };
-
-    let small_preview_base = if small_valid {
-        Arc::clone(&cached_preview_lock.as_ref().unwrap().small_image)
-    } else {
-        let small = if interactive_divisor > 1.0 {
-            let target_size = (preview_dim as f32 / interactive_divisor) as u32;
-            let (w, h) = final_preview_base.dimensions();
-            let (small_w, small_h) = if w > h {
-                let ratio = h as f32 / w as f32;
-                (target_size, (target_size as f32 * ratio) as u32)
-            } else {
-                let ratio = w as f32 / h as f32;
-                ((target_size as f32 * ratio) as u32, target_size)
-            };
-            Arc::new(image_processing::downscale_f32_image(
-                &final_preview_base,
-                small_w,
-                small_h,
-            ))
-        } else {
-            Arc::clone(&final_preview_base)
-        };
-
-        if is_interactive && base_valid {
-            *state
-                .gpu_image_cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = None;
-        }
-
-        small
-    };
-
-    *cached_preview_lock = Some(CachedPreview {
-        image: Arc::clone(&final_preview_base),
-        small_image: Arc::clone(&small_preview_base),
-        transform_hash: new_transform_hash,
-        scale: scale_for_gpu,
-        unscaled_crop_offset,
-        preview_dim,
-        interactive_divisor,
-    });
-
-    drop(cached_preview_lock);
-
-    let (processing_image, effective_scale, jpeg_quality) = if is_interactive {
-        let orig_w = final_preview_base.width() as f32;
-        let small_w = small_preview_base.width() as f32;
-        let scale_factor = if orig_w > 0.0 { small_w / orig_w } else { 1.0 };
-        let new_scale = scale_for_gpu * scale_factor;
-        (small_preview_base, new_scale, interactive_quality)
-    } else {
-        (final_preview_base, scale_for_gpu, 94)
+    let direct_display = direct_display_image.is_some();
+    let (processing_image, effective_scale, unscaled_crop_offset) = match direct_display_image {
+        Some((image, crop_offset)) => (image, 1.0, crop_offset),
+        None => jpeg_preview_image(
+            &state,
+            &loaded_image,
+            &adjustments_clone,
+            new_transform_hash,
+            preview_dim,
+            interactive_divisor,
+            is_interactive,
+        )?,
     };
 
     let (preview_width, preview_height) = processing_image.dimensions();
 
-    let pixel_roi = if is_interactive {
+    let pixel_roi = if is_interactive && !direct_display {
         roi.map(|(nx, ny, nw, nh)| crate::gpu_processing::Roi {
             x: (nx * preview_width as f32).round() as u32,
             y: (ny * preview_height as f32).round() as u32,
@@ -701,36 +744,40 @@ fn process_preview_job(
         None
     };
 
+    let request = RenderRequest {
+        adjustments: final_adjustments,
+        mask_bitmaps: &mask_bitmaps,
+        lut,
+        roi: pixel_roi,
+    };
+
+    if direct_display {
+        crate::gpu_processing::render_to_display(
+            &context,
+            &state,
+            &processing_image,
+            request,
+            analytics_config,
+        )?;
+        let _ = app_handle.emit(
+            "wgpu-frame-ready",
+            serde_json::json!({ "path": loaded_image.path }),
+        );
+        return Ok(b"WGPU_RENDER".to_vec());
+    }
+
     let final_processed_image_result =
         crate::image_processing::process_and_get_dynamic_image_with_analytics(
             &context,
             &state,
             &processing_image,
             new_transform_hash,
-            RenderRequest {
-                adjustments: final_adjustments,
-                mask_bitmaps: &mask_bitmaps,
-                lut,
-                roi: pixel_roi,
-            },
+            request,
             "apply_adjustments",
-            use_wgpu_renderer,
             analytics_config,
         );
 
     if let Ok(final_processed_image) = final_processed_image_result {
-        if use_wgpu_renderer {
-            let _ = context.device.poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(std::time::Duration::from_millis(500)),
-            });
-            let _ = app_handle.emit(
-                "wgpu-frame-ready",
-                serde_json::json!({ "path": loaded_image.path }),
-            );
-            return Ok(b"WGPU_RENDER".to_vec());
-        }
-
         let final_processed_image = Arc::new(final_processed_image);
         let final_rgba_image = match &*final_processed_image {
             DynamicImage::ImageRgba8(img) => img,
@@ -748,6 +795,11 @@ fn process_preview_job(
 
         let step_start = std::time::Instant::now();
 
+        let jpeg_quality = if is_interactive {
+            interactive_quality
+        } else {
+            94
+        };
         let encode_result = Encoder::new(Preset::BaselineFastest)
             .quality(jpeg_quality)
             .fast_color(true)
@@ -2310,6 +2362,7 @@ pub fn run() {
             cached_preview: Mutex::new(None),
             gpu_context: Mutex::new(None),
             gpu_image_cache: Mutex::new(None),
+            display_image: Mutex::new(None),
             gpu_processor: Mutex::new(None),
             ai_state: Mutex::new(None),
             ai_init_lock: TokioMutex::new(()),

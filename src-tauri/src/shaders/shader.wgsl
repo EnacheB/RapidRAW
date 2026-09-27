@@ -1776,10 +1776,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         t_luma_nr, t_color_nr, scale, is_raw
     );
 
-    let sharpness_blurred = textureLoad(sharpness_blur_texture, id.xy, 0).rgb;
-    let tonal_blurred = textureLoad(tonal_blur_texture, id.xy, 0).rgb;
-    let clarity_blurred = textureLoad(clarity_blur_texture, id.xy, 0).rgb;
-    let structure_blurred = textureLoad(structure_blur_texture, id.xy, 0).rgb;
+    let sharpness_blurred = textureLoad(sharpness_blur_texture, absolute_coord, 0).rgb;
+    let tonal_blurred = textureLoad(tonal_blur_texture, absolute_coord, 0).rgb;
+    let clarity_blurred = textureLoad(clarity_blur_texture, absolute_coord, 0).rgb;
+    let structure_blurred = textureLoad(structure_blur_texture, absolute_coord, 0).rgb;
 
     var locally_contrasted_rgb = initial_linear_rgb;
 
@@ -1990,7 +1990,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     if (HIGH_PRECISION_OUTPUT == 0u) {
         let dither_amount = 1.0 / 255.0;
-        final_rgb += dither(id.xy) * dither_amount;
+        final_rgb += dither(absolute_coord) * dither_amount;
     }
 
     textureStore(output_texture, id.xy, vec4<f32>(clamp(final_rgb, vec3<f32>(0.0), vec3<f32>(1.0)), original_alpha));

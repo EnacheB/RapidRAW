@@ -10,12 +10,11 @@ use sysinfo::Disks;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
-use wgpu::{Texture, TextureView};
 
 use crate::ai_processing::AiState;
 use crate::cache_utils::DecodedImageCache;
 use crate::camera_tethering::CameraSession;
-use crate::gpu_processing::GpuProcessor;
+use crate::gpu_processing::{DisplayImage, GpuImage, GpuProcessor};
 use crate::image_processing::GpuContext;
 use crate::launch_request::ExternalEditSession;
 use crate::lens_correction::LensDatabase;
@@ -124,20 +123,8 @@ pub struct CachedPreview {
 }
 
 pub struct GpuImageCache {
-    pub texture: Texture,
-    pub texture_view: TextureView,
-    pub gf_coeffs_view: TextureView,
-    pub gf_dehaze_view: TextureView,
-    pub is_raw: u32,
-    pub width: u32,
-    pub height: u32,
+    pub image: GpuImage,
     pub transform_hash: u64,
-}
-
-pub struct GpuProcessorState {
-    pub processor: GpuProcessor,
-    pub width: u32,
-    pub height: u32,
 }
 
 pub struct PreviewJob {
@@ -223,7 +210,8 @@ pub struct AppState {
     pub cached_preview: Mutex<Option<CachedPreview>>,
     pub gpu_context: Mutex<Option<GpuContext>>,
     pub gpu_image_cache: Mutex<Option<GpuImageCache>>,
-    pub gpu_processor: Mutex<Option<GpuProcessorState>>,
+    pub display_image: Mutex<Option<DisplayImage>>,
+    pub gpu_processor: Mutex<Option<GpuProcessor>>,
     pub ai_state: Mutex<Option<AiState>>,
     pub ai_init_lock: TokioMutex<()>,
     pub active_ai_tasks: Mutex<HashMap<String, Arc<AiTaskToken>>>,

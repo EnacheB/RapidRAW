@@ -31,6 +31,7 @@ export function useImageProcessing(
   const baseRenderSize = useEditorStore((state) => state.baseRenderSize);
   const originalSize = useEditorStore((state) => state.originalSize);
   const isSliderDragging = useEditorStore((state) => state.isSliderDragging);
+  const hasRenderedFirstFrame = useEditorStore((state) => state.hasRenderedFirstFrame);
   const setEditor = useEditorStore((state) => state.setEditor);
 
   const activeView = useUIStore((state) => state.activeView);
@@ -391,6 +392,8 @@ export function useImageProcessing(
   );
 
   useEffect(() => {
+    // Direct display renders the whole photo at full resolution, so zooming needs no render.
+    if (hasRenderedFirstFrame) return;
     if (activeView === 'editor' && selectedImage?.isReady && displaySize.width > 0 && !isSliderDragging) {
       let baseRes = calculateTargetRes();
       if (originalSize.width > 0 && originalSize.height > 0) {
@@ -416,6 +419,7 @@ export function useImageProcessing(
     isSliderDragging,
     requestHiFiZoom,
     originalSize,
+    hasRenderedFirstFrame,
   ]);
 
   useEffect(() => {

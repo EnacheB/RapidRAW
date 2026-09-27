@@ -10,7 +10,9 @@
         "agx": "AgX",
         "agxDesc": "Mappage des tons type film",
         "basic": "Standard",
-        "basicDesc": "Mappage des tons standard"
+        "basicDesc": "Mappage des tons standard",
+        "profile": "Profil",
+        "profileDesc": "Profil d'appareil"
       },
       "reset": "Réinitialiser",
       "shadows": "Ombres",
@@ -1883,6 +1885,8 @@
         "appleRaw9Desc": "Développe les fichiers RAW avec le décodeur RAW 9 de Core Image d'Apple, qui effectue le dématriçage et la réduction de bruit en une seule étape sur le Neural Engine. Nécessite macOS 27 ou ultérieur et un appareil photo pris en charge ; les fichiers non pris en charge utilisent automatiquement le décodeur intégré. Plus lent que le décodeur par défaut. Les miniatures ne sont pas affectées.",
         "applyPreprocessing": "Appliquer le prétraitement aux Non-RAW",
         "applyPreprocessingDesc": "Si activé, la réduction du bruit colorimétrique de base et la pré-accentuation ci-dessus seront également appliquées aux formats standard.",
+        "cameraProfiles": "Profils d'appareil",
+        "cameraProfilesDesc": "Développe les couleurs des fichiers RAW avec le profil DNG de l'appareil (.dcp) au lieu d'une matrice générique. Les profils sont recherchés par modèle d'appareil dans le dossier camera_profiles du répertoire de données de l'application, puis dans les dossiers de profils de RawTherapee et d'ART. Les appareils disposant d'un profil ont aussi le mappeur de tons « Profil », avec sa courbe tonale et son rendu.",
         "colorNr": "Réduction du bruit colorimétrique de base",
         "colorNrDesc": "Applique un filtre bilatéral croisé tôt dans le traitement pour éliminer le bruit de chrominance. Valeur plus élevée = Réduction plus forte.",
         "defaultNonRawTonemapper": "Mappeur de tons par défaut (Non-RAW)",
@@ -1890,6 +1894,7 @@
         "defaultRawTonemapper": "Mappeur de tons par défaut (RAW)",
         "defaultRawTonemapperDesc": "Le mappeur de tons à appliquer aux images RAW.",
         "enableAppleRaw9": "Utiliser Apple RAW 9 pour les fichiers RAW",
+        "enableCameraProfiles": "Utiliser les profils d'appareil pour les fichiers RAW",
         "enablePreprocessingNonRaws": "Activer pour les Non-RAW",
         "enableTonemapperOverride": "Activer la surcharge du mappeur de tons",
         "highlightRecovery": "Récupération des hautes lumières RAW",

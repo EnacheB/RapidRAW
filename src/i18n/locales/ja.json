@@ -10,7 +10,9 @@
         "agx": "AgX",
         "agxDesc": "フィルム調トーンマッピング",
         "basic": "標準",
-        "basicDesc": "標準トーンマッピング"
+        "basicDesc": "標準トーンマッピング",
+        "profile": "プロファイル",
+        "profileDesc": "カメラプロファイル"
       },
       "reset": "リセット",
       "shadows": "シャドウ",
@@ -1846,6 +1848,8 @@
         "appleRaw9Desc": "AppleのCore Image RAW 9デコーダを使用してRAWファイルを現像します。これはNeural Engine上でデモザイク処理とノイズ低減を1ステップで行います。macOS 27以降および対応カメラが必要です。未対応のファイルは自動的に内蔵デコーダを使用します。デフォルトのデコーダより低速です。サムネイルには影響しません。",
         "applyPreprocessing": "RAW以外の画像にも事前処理を適用",
         "applyPreprocessingDesc": "有効にすると、上記のカラーノイズ低減と事前シャープ処理が標準フォーマットの画像にも適用されます。",
+        "cameraProfiles": "カメラプロファイル",
+        "cameraProfilesDesc": "汎用マトリクスの代わりに、カメラの DNG カメラプロファイル (.dcp) で RAW ファイルの色を現像します。プロファイルはカメラの機種名で、アプリのデータディレクトリ内の camera_profiles フォルダ、次に RawTherapee と ART のプロファイルフォルダから検索されます。プロファイルのあるカメラでは、そのトーンカーブとルックを使う「プロファイル」トーンマッパーも使えます。",
         "colorNr": "カラーノイズ低減 (基本)",
         "colorNrDesc": "パイプラインの初期段階でクロスバイラテラルフィルタを適用し、カラーノイズを除去します。値が大きいほど効果が強まります。",
         "defaultNonRawTonemapper": "標準トーンマッパー (RAW以外)",
@@ -1853,6 +1857,7 @@
         "defaultRawTonemapper": "標準トーンマッパー (RAW)",
         "defaultRawTonemapperDesc": "RAW画像に適用される標準のトーンマッパーです。",
         "enableAppleRaw9": "RAWファイルにApple RAW 9を使用する",
+        "enableCameraProfiles": "RAWファイルにカメラプロファイルを使用する",
         "enablePreprocessingNonRaws": "RAW以外の画像にも適用",
         "enableTonemapperOverride": "トーンマッパーの上書きを有効化",
         "highlightRecovery": "RAWハイライト再現",

@@ -10,6 +10,7 @@ use std::num::NonZero;
 use tauri::Manager;
 use wgpu::util::{DeviceExt, TextureDataOrder};
 
+use crate::camera_profile::CameraProfile;
 use crate::image_processing::{AllAdjustments, GpuContext, MAX_MASKS};
 use crate::lut_processing::Lut;
 use crate::{AppState, GpuImageCache};
@@ -34,6 +35,7 @@ pub struct RenderRequest<'a> {
     pub mask_bitmaps: &'a [ImageBuffer<Luma<u8>, Vec<u8>>],
     pub lut: Option<Arc<Lut>>,
     pub roi: Option<Roi>,
+    pub camera_profile: Option<Arc<CameraProfile>>,
 }
 
 #[repr(C)]
@@ -747,6 +749,7 @@ pub struct GpuProcessor {
     dummy_masks_view: wgpu::TextureView,
     dummy_lut_view: wgpu::TextureView,
     dummy_lut_sampler: wgpu::Sampler,
+    dummy_camera_profile_buffer: wgpu::Buffer,
 }
 
 /// The main pass writing 16-bit floats, for exports. Built on first use.
@@ -787,8 +790,16 @@ enum RenderedPixels {
     U16(Vec<u16>),
 }
 
-fn high_precision_shader_source() -> String {
-    include_str!("shaders/shader.wgsl").replace("rgba8unorm, write>", "rgba16float, write>")
+pub(crate) fn main_shader_source() -> String {
+    [
+        include_str!("shaders/shader.wgsl"),
+        include_str!("shaders/camera_profile.wgsl"),
+    ]
+    .join("\n")
+}
+
+pub(crate) fn high_precision_shader_source() -> String {
+    main_shader_source().replace("rgba8unorm, write>", "rgba16float, write>")
 }
 
 const FLARE_MAP_SIZE: u32 = 512;
@@ -1035,7 +1046,7 @@ impl GpuProcessor {
 
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Image Processing Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(main_shader_source().into()),
         });
 
         let mut bind_group_layout_entries = vec![
@@ -1156,6 +1167,16 @@ impl GpuProcessor {
             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
             count: None,
         });
+        bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 13 + MAX_MASK_BINDINGS,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        });
 
         bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
             binding: 11 + MAX_MASK_BINDINGS,
@@ -1250,6 +1271,12 @@ impl GpuProcessor {
         });
         let dummy_lut_view = dummy_lut_texture.create_view(&Default::default());
         let dummy_lut_sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+        let dummy_camera_profile_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Disabled Camera Profile Buffer"),
+                contents: &CameraProfile::disabled_gpu_bytes(),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
 
         Ok(Self {
             tile: Tile::new(device, wgpu::TextureFormat::Rgba8Unorm),
@@ -1283,6 +1310,7 @@ impl GpuProcessor {
             dummy_masks_view,
             dummy_lut_view,
             dummy_lut_sampler,
+            dummy_camera_profile_buffer,
         })
     }
 
@@ -1708,6 +1736,14 @@ impl GpuProcessor {
             (self.dummy_lut_view.clone(), self.dummy_lut_sampler.clone())
         };
 
+        let camera_profile_buffer = request.camera_profile.as_ref().map(|profile| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Camera Profile Buffer"),
+                contents: &profile.gpu_bytes(),
+                usage: wgpu::BufferUsages::STORAGE,
+            })
+        });
+
         let adjustments = &request.adjustments;
         if adjustments.global.flare_amount > 0.0 {
             let mut encoder = device.create_command_encoder(&Default::default());
@@ -1860,6 +1896,13 @@ impl GpuProcessor {
         bind_group_entries.push(wgpu::BindGroupEntry {
             binding: 12 + MAX_MASK_BINDINGS,
             resource: wgpu::BindingResource::TextureView(&image.gf_dehaze),
+        });
+        bind_group_entries.push(wgpu::BindGroupEntry {
+            binding: 13 + MAX_MASK_BINDINGS,
+            resource: camera_profile_buffer
+                .as_ref()
+                .unwrap_or(&self.dummy_camera_profile_buffer)
+                .as_entire_binding(),
         });
 
         device.create_bind_group(&wgpu::BindGroupDescriptor {

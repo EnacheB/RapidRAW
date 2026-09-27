@@ -10,7 +10,9 @@
         "agx": "AgX",
         "agxDesc": "필름 같은 톤 매핑",
         "basic": "기본",
-        "basicDesc": "표준 톤 매핑"
+        "basicDesc": "표준 톤 매핑",
+        "profile": "프로파일",
+        "profileDesc": "카메라 프로파일"
       },
       "reset": "초기화",
       "shadows": "섀도우",
@@ -1846,6 +1848,8 @@
         "appleRaw9Desc": "Apple의 Core Image RAW 9 디코더로 RAW 파일을 현상합니다. Neural Engine에서 디모자이크와 노이즈 제거를 한 번에 처리합니다. macOS 27 이상 및 지원되는 카메라가 필요하며, 지원되지 않는 파일은 내장 디코더를 자동으로 사용합니다. 기본 디코더보다 느립니다. 썸네일에는 영향을 주지 않습니다.",
         "applyPreprocessing": "RAW가 아닌 이미지에 전처리 적용",
         "applyPreprocessingDesc": "활성화하면 위의 기본 색상 노이즈 감소와 사전 선명도 향상이 표준 포맷에도 적용됩니다.",
+        "cameraProfiles": "카메라 프로파일",
+        "cameraProfilesDesc": "일반 매트릭스 대신 카메라의 DNG 카메라 프로파일(.dcp)로 RAW 파일의 색상을 현상합니다. 프로파일은 카메라 모델명으로 앱 데이터 디렉터리의 camera_profiles 폴더에서 먼저 찾고, 그다음 RawTherapee와 ART의 프로파일 폴더에서 찾습니다. 프로파일이 있는 카메라에서는 해당 톤 커브와 룩을 적용하는 \"프로파일\" 톤 매퍼도 사용할 수 있습니다.",
         "colorNr": "기본 색상 노이즈 감소",
         "colorNrDesc": "파이프라인 초기에 교차 양방향 필터를 적용하여 색차 노이즈를 제거합니다. 값이 높을수록 노이즈 감소가 강해집니다.",
         "defaultNonRawTonemapper": "기본 비RAW 톤매퍼",
@@ -1853,6 +1857,7 @@
         "defaultRawTonemapper": "기본 RAW 톤매퍼",
         "defaultRawTonemapperDesc": "RAW 이미지에 적용할 톤매퍼입니다.",
         "enableAppleRaw9": "RAW 파일에 Apple RAW 9 사용",
+        "enableCameraProfiles": "RAW 파일에 카메라 프로파일 사용",
         "enablePreprocessingNonRaws": "RAW가 아닌 이미지에 활성화",
         "enableTonemapperOverride": "톤매퍼 재정의 활성화",
         "highlightRecovery": "RAW 하이라이트 복구",

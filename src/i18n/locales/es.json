@@ -10,7 +10,9 @@
         "agx": "AgX",
         "agxDesc": "Mapeo de tonos estilo película",
         "basic": "Básico",
-        "basicDesc": "Mapeo de tonos estándar"
+        "basicDesc": "Mapeo de tonos estándar",
+        "profile": "Perfil",
+        "profileDesc": "Perfil de cámara"
       },
       "reset": "Restablecer",
       "shadows": "Sombras",
@@ -1883,6 +1885,8 @@
         "appleRaw9Desc": "Revela archivos RAW con el decodificador RAW 9 de Core Image de Apple, que realiza el interpolado cromático y reduce el ruido en un solo paso en el Neural Engine. Requiere macOS 27 o posterior y una cámara compatible; los archivos no compatibles usan automáticamente el decodificador integrado. Más lento que el decodificador predeterminado. Las miniaturas no se ven afectadas.",
         "applyPreprocessing": "Aplicar preprocesamiento a los no RAW",
         "applyPreprocessingDesc": "Si está activado, la reducción base del ruido de color y el preenfoque mencionados arriba también se aplicarán a los formatos estándar.",
+        "cameraProfiles": "Perfiles de cámara",
+        "cameraProfilesDesc": "Revela los colores de los archivos RAW con el perfil DNG de la cámara (.dcp) en lugar de una matriz genérica. Los perfiles se buscan por modelo de cámara en la carpeta camera_profiles del directorio de datos de la aplicación y después en las carpetas de perfiles de RawTherapee y ART. Las cámaras con perfil también tienen el mapeador de tonos «Perfil», con su curva tonal y su aspecto.",
         "colorNr": "Reducción base del ruido de color",
         "colorNrDesc": "Aplica un filtro bilateral cruzado temprano en el pipeline para eliminar el ruido de croma. Valor más alto = mayor reducción.",
         "defaultNonRawTonemapper": "Mapeador de tonos predeterminado no RAW",
@@ -1890,6 +1894,7 @@
         "defaultRawTonemapper": "Mapeador de tonos predeterminado RAW",
         "defaultRawTonemapperDesc": "El mapeador de tonos a aplicar a las imágenes RAW.",
         "enableAppleRaw9": "Usar Apple RAW 9 para archivos RAW",
+        "enableCameraProfiles": "Usar perfiles de cámara para archivos RAW",
         "enablePreprocessingNonRaws": "Activar para no RAW",
         "enableTonemapperOverride": "Activar anulación del mapeador de tonos",
         "highlightRecovery": "Recuperación de altas luces RAW",

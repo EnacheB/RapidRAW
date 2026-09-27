@@ -10,7 +10,9 @@
         "agx": "AgX",
         "agxDesc": "Filmähnliches Tonemapping",
         "basic": "Standard",
-        "basicDesc": "Standard-Tonemapping"
+        "basicDesc": "Standard-Tonemapping",
+        "profile": "Profil",
+        "profileDesc": "Kameraprofil"
       },
       "reset": "Zurücksetzen",
       "shadows": "Tiefen",
@@ -1848,6 +1850,8 @@
         "appleRaw9Desc": "Entwickelt RAW-Dateien mit Apples Core-Image-Decoder RAW 9, der Demosaicing und Entrauschen in einem Schritt auf der Neural Engine ausführt. Erfordert macOS 27 oder neuer und eine unterstützte Kamera; nicht unterstützte Dateien verwenden automatisch den integrierten Decoder. Langsamer als der Standard-Decoder. Vorschaubilder sind nicht betroffen.",
         "applyPreprocessing": "Vorverarbeitung auf Nicht-RAWs anwenden",
         "applyPreprocessingDesc": "Wenn aktiviert, wird die Rauschreduzierung und Vorschärfung auch auf Standardformate angewendet.",
+        "cameraProfiles": "Kameraprofile",
+        "cameraProfilesDesc": "Entwickelt die Farben von RAW-Dateien mit dem DNG-Kameraprofil (.dcp) der Kamera statt mit einer generischen Matrix. Profile werden anhand des Kameramodells im Ordner camera_profiles des App-Datenverzeichnisses gesucht, danach in den Profilordnern von RawTherapee und ART. Kameras mit Profil erhalten zusätzlich den Tonemapper „Profil“ mit dessen Tonkurve und Look.",
         "colorNr": "Basis-Farbrauschreduzierung",
         "colorNrDesc": "Wendet früh in der Pipeline einen Filter an, um Farbrauschen zu entfernen. Höherer Wert = Stärkere Reduzierung.",
         "defaultNonRawTonemapper": "Standard-Tonemapper (Nicht-RAW)",
@@ -1855,6 +1859,7 @@
         "defaultRawTonemapper": "Standard-Tonemapper (RAW)",
         "defaultRawTonemapperDesc": "Der Tonemapper für RAW-Bilder.",
         "enableAppleRaw9": "Apple RAW 9 für RAW-Dateien verwenden",
+        "enableCameraProfiles": "Kameraprofile für RAW-Dateien verwenden",
         "enablePreprocessingNonRaws": "Für Nicht-RAWs aktivieren",
         "enableTonemapperOverride": "Tonemapper-Override aktivieren",
         "highlightRecovery": "RAW-Lichterwiederherstellung",

@@ -10,7 +10,9 @@
         "agx": "AgX",
         "agxDesc": "Film-like Tonemapping",
         "basic": "Basic",
-        "basicDesc": "Standard Tonemapping"
+        "basicDesc": "Standard Tonemapping",
+        "profile": "Profile",
+        "profileDesc": "Camera profile"
       },
       "reset": "Reset",
       "shadows": "Shadows",
@@ -1848,6 +1850,8 @@
         "appleRaw9Desc": "Develop RAW files with Apple's Core Image RAW 9 decoder, which demosaics and denoises in one step on the Neural Engine. Requires macOS 27 or later and a supported camera; unsupported files automatically use the built-in decoder. Slower than the default decoder. Thumbnails are not affected.",
         "applyPreprocessing": "Apply Preprocessing to Non-RAWs",
         "applyPreprocessingDesc": "If enabled, the base color noise reduction and pre-sharpening above will also be applied to standard formats.",
+        "cameraProfiles": "Camera Profiles",
+        "cameraProfilesDesc": "Develop RAW colors with the camera's DNG camera profile (.dcp) instead of a generic matrix. Profiles are matched by camera model in the camera_profiles folder of the app data directory, then in RawTherapee's and ART's profile folders. Cameras with a profile also get a \"Profile\" tone mapper with its tone curve and look.",
         "colorNr": "Base Color Noise Reduction",
         "colorNrDesc": "Applies a cross-bilateral filter early in the pipeline to remove chroma noise. Higher value = Stronger NR.",
         "defaultNonRawTonemapper": "Default Non-RAW Tonemapper",
@@ -1855,6 +1859,7 @@
         "defaultRawTonemapper": "Default RAW Tonemapper",
         "defaultRawTonemapperDesc": "The tonemapper to apply to RAW images.",
         "enableAppleRaw9": "Use Apple RAW 9 for RAW files",
+        "enableCameraProfiles": "Use camera profiles for RAW files",
         "enablePreprocessingNonRaws": "Enable for Non-RAWs",
         "enableTonemapperOverride": "Enable Tonemapper Override",
         "highlightRecovery": "RAW Highlight Recovery",

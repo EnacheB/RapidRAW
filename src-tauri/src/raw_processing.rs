@@ -11,6 +11,7 @@ use rawler::{
     rawimage::{RawImage, RawPhotometricInterpretation},
     rawsource::RawSource,
 };
+use rayon::prelude::*;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -21,6 +22,7 @@ pub fn develop_raw_image(
     fast_demosaic: bool,
     highlight_compression: f32,
     linear_mode: String,
+    use_camera_profiles: bool,
     cancel_token: Option<(Arc<AtomicUsize>, usize)>,
 ) -> Result<DynamicImage> {
     let (developed_image, orientation) = develop_internal(
@@ -28,6 +30,7 @@ pub fn develop_raw_image(
         fast_demosaic,
         highlight_compression,
         linear_mode,
+        use_camera_profiles,
         cancel_token,
     )?;
     Ok(apply_orientation(developed_image, orientation))
@@ -136,6 +139,7 @@ fn develop_internal(
     fast_demosaic: bool,
     _highlight_compression: f32,
     linear_mode: String,
+    use_camera_profiles: bool,
     cancel_token: Option<(Arc<AtomicUsize>, usize)>,
 ) -> Result<(DynamicImage, Orientation)> {
     let check_cancel = || -> Result<()> {
@@ -201,6 +205,21 @@ fn develop_internal(
     raw_image.wb_coeffs =
         crate::multi_exposure::neutralize_wb_if_multiexposure(raw_image.wb_coeffs, file_bytes);
 
+    // The camera's own profile, when there is one, replaces rawler's generic matrix.
+    let calibration = if use_camera_profiles {
+        crate::camera_profile::for_raw(&raw_image).and_then(|profile| {
+            let [r, g, b, _] = raw_image.wb_coeffs;
+            profile.calibration([r, g, b])
+        })
+    } else {
+        None
+    };
+    if calibration.is_some() {
+        developer
+            .steps
+            .retain(|&step| step != ProcessingStep::Calibrate);
+    }
+
     check_cancel()?;
     let mut developed_intermediate = developer.develop_intermediate(&raw_image)?;
 
@@ -235,10 +254,14 @@ fn develop_internal(
             });
         }
         Intermediate::ThreeColor(pixels) => {
-            pixels.data.iter_mut().for_each(|p| {
+            pixels.data.par_iter_mut().for_each(|p| {
                 let mut r = (p[0] * rescale_factor).max(0.0);
                 let mut g = (p[1] * rescale_factor).max(0.0);
                 let mut b = (p[2] * rescale_factor).max(0.0);
+
+                if let Some(calibration) = &calibration {
+                    [r, g, b] = calibration.apply([r, g, b]);
+                }
 
                 if is_linear_format && apply_ungamma {
                     r = srgb_to_linear(r.max(0.0));

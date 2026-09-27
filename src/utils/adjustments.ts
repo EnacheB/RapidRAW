@@ -338,7 +338,7 @@ export interface Adjustments {
   structure: number;
   temperature: number;
   tint: number;
-  toneMapper: 'agx' | 'basic';
+  toneMapper: 'agx' | 'basic' | 'profile';
   transformDistortion: number;
   transformVertical: number;
   transformHorizontal: number;

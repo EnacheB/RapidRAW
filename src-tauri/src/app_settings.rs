@@ -576,6 +576,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub use_apple_raw9: Option<bool>,
     #[serde(default)]
+    pub use_camera_profiles: Option<bool>,
+    #[serde(default)]
     pub exif_overlay: Option<String>,
     #[serde(default)]
     pub language: Option<String>,
@@ -689,6 +691,7 @@ impl Default for AppSettings {
             raw_preprocessing_sharpening: Some(0.35),
             apply_preprocessing_to_non_raws: Some(false),
             use_apple_raw9: Some(false),
+            use_camera_profiles: Some(false),
             exif_overlay: Some("off".to_string()),
             language: Some("en".to_string()),
             folder_tree_sort: Some(FolderTreeSort::default()),

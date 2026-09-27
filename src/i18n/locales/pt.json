@@ -10,7 +10,9 @@
         "agx": "AgX",
         "agxDesc": "Mapeamento de Tons tipo Filme",
         "basic": "Básico",
-        "basicDesc": "Mapeamento de Tons Padrão"
+        "basicDesc": "Mapeamento de Tons Padrão",
+        "profile": "Perfil",
+        "profileDesc": "Perfil da câmara"
       },
       "reset": "Redefinir",
       "shadows": "Sombras",
@@ -1884,6 +1886,8 @@
         "appleRaw9Desc": "Revela ficheiros RAW com o descodificador RAW 9 do Core Image da Apple, que faz o demosaicing e reduz o ruído num só passo no Neural Engine. Requer o macOS 27 ou posterior e uma câmara suportada; ficheiros não suportados usam automaticamente o descodificador integrado. Mais lento que o descodificador padrão. As miniaturas não são afetadas.",
         "applyPreprocessing": "Aplicar Pré-processamento em Não-RAWs",
         "applyPreprocessingDesc": "Se ativado, a redução de ruído de cor base e a pré-nitidez acima também serão aplicadas a formatos padrão.",
+        "cameraProfiles": "Perfis de Câmara",
+        "cameraProfilesDesc": "Revela as cores dos ficheiros RAW com o perfil DNG da câmara (.dcp) em vez de uma matriz genérica. Os perfis são procurados pelo modelo da câmara na pasta camera_profiles do diretório de dados da aplicação e depois nas pastas de perfis do RawTherapee e do ART. As câmaras com perfil também têm o mapeador de tons \"Perfil\", com a respetiva curva tonal e aspeto.",
         "colorNr": "Redução Base de Ruído de Cor",
         "colorNrDesc": "Aplica um filtro bilateral cruzado no início do pipeline para remover o ruído de croma. Valor mais alto = Redução mais forte.",
         "defaultNonRawTonemapper": "Mapeador de Tons Padrão Não-RAW",
@@ -1891,6 +1895,7 @@
         "defaultRawTonemapper": "Mapeador de Tons Padrão RAW",
         "defaultRawTonemapperDesc": "O mapeador de tons a ser aplicado em imagens RAW.",
         "enableAppleRaw9": "Usar Apple RAW 9 para ficheiros RAW",
+        "enableCameraProfiles": "Usar perfis de câmara para ficheiros RAW",
         "enablePreprocessingNonRaws": "Ativar para Não-RAWs",
         "enableTonemapperOverride": "Ativar Substituição de Mapeador de Tons",
         "highlightRecovery": "Recuperação de Realces RAW",

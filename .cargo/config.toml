@@ -1,0 +1,17 @@
+# Fork tooling (never upstream). Applies to every checkout of this repo: the
+# main checkout, its worktrees and package builds.
+
+[build]
+# One dependency cache for all checkouts, so a new worktree only compiles the
+# app crate. Each checkout's finished binaries stay in its own src-tauri/target/,
+# so concurrent agents never run or install each other's builds.
+build-dir = "{cargo-cache-home}/rapidraw-target"
+rustflags = ["-C", "target-cpu=native"] # the package's CPU target
+
+# For iterating and test builds: the release profile without its package-only
+# settings (fat LTO, one codegen unit), which cost ~8 minutes on one core per build.
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 256
+incremental = true

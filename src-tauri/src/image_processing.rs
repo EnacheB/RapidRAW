@@ -396,7 +396,7 @@ pub fn downscale_f32_image(image: &DynamicImage, nwidth: u32, nheight: u32) -> D
 }
 
 #[inline(always)]
-fn interpolate_pixel(
+pub(crate) fn interpolate_pixel(
     src_raw: &[f32],
     src_width: usize,
     src_height: usize,

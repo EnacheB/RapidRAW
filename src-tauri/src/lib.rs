@@ -36,6 +36,7 @@ mod camera_tethering;
 mod culling;
 mod denoising;
 mod effect_maps;
+mod embedded_lens;
 mod exif_processing;
 #[doc(hidden)]
 pub mod face_exposure;

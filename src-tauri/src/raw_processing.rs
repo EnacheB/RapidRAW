@@ -291,6 +291,18 @@ fn develop_internal(
 
     check_cancel()?;
 
+    if let Intermediate::ThreeColor(pixels) = &mut developed_intermediate
+        && let Some(distortion) = crate::embedded_lens::read_distortion(file_bytes)
+    {
+        let corrected = crate::embedded_lens::correct(
+            pixels.data.as_flattened(),
+            width as usize,
+            height as usize,
+            &distortion,
+        );
+        pixels.data = corrected.chunks_exact(3).map(|p| [p[0], p[1], p[2]]).collect();
+    }
+
     let dynamic_image = match developed_intermediate {
         Intermediate::ThreeColor(pixels) => {
             let buffer = ImageBuffer::<Rgba<f32>, _>::from_fn(width, height, |x, y| {

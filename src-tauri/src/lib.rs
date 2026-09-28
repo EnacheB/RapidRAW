@@ -31,6 +31,7 @@ mod app_settings;
 mod app_state;
 mod apple_raw;
 mod cache_utils;
+pub mod camera_match;
 pub mod camera_profile;
 mod camera_tethering;
 mod culling;
@@ -2469,6 +2470,7 @@ pub fn run() {
             export_processing::estimate_export_sizes,
             image_processing::calculate_auto_adjustments,
             image_processing::sample_white_balance,
+            camera_match::match_camera,
             mask_generation::generate_mask_overlay,
             file_management::update_exif_fields,
             file_management::get_supported_file_types,

@@ -39,6 +39,7 @@ export enum Invokes {
   CalculateAutoAdjustments = 'calculate_auto_adjustments',
   SampleWhiteBalance = 'sample_white_balance',
   CancelAiTask = 'cancel_ai_task',
+  MatchCamera = 'match_camera',
   CancelExport = 'cancel_export',
   CheckAIConnectorStatus = 'check_ai_connector_status',
   ClearAllSidecars = 'clear_all_sidecars',

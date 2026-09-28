@@ -100,6 +100,17 @@ export function useEditorActions() {
     }
   }, [setAdjustments]);
 
+  // Exposure and Shadows that make the camera profile match the camera's own JPEG.
+  const handleMatchCamera = useCallback(async () => {
+    if (!useEditorStore.getState().selectedImage?.isReady) return;
+    try {
+      const matched: Partial<Adjustments> = await invoke(Invokes.MatchCamera);
+      setAdjustments((prev: Adjustments) => ({ ...prev, ...matched }));
+    } catch (err) {
+      toast.error(`Match camera failed: ${err}`);
+    }
+  }, [setAdjustments]);
+
   const toggleShowOriginal = useCallback(() => {
     setEditor((state) => {
       const isShowing = !state.showOriginal;
@@ -417,6 +428,7 @@ export function useEditorActions() {
     setAdjustments,
     handleRotate,
     handleAutoAdjustments,
+    handleMatchCamera,
     handleLutSelect,
     setLutPreviewOverride,
     handleResetAdjustments,

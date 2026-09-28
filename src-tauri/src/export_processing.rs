@@ -33,8 +33,7 @@ use crate::image_loader::{
 use crate::image_processing::{
     AllAdjustments, Crop, GpuContext, RenderOutputPrecision, RenderRequest, downscale_f32_image,
     get_all_adjustments_from_json, get_or_init_gpu_context, process_and_get_dynamic_image,
-    process_and_get_dynamic_image_with_precision, resolve_tonemapper_override,
-    resolve_tonemapper_override_from_handle,
+    process_and_get_dynamic_image_with_precision, resolve_tonemapper_override_from_handle,
 };
 use crate::lut_processing::{
     convert_image_to_cube_lut, generate_identity_lut_image, get_or_load_lut,
@@ -991,8 +990,8 @@ fn process_image_for_export_pipeline(
         .collect();
 
     let settings = load_settings(app_handle.clone()).unwrap_or_default();
-    let tm_override = resolve_tonemapper_override(&settings, is_raw);
-    let mut all_adjustments = get_all_adjustments_from_json(js_adjustments, is_raw, as_shot_white_balance(path), tm_override);
+    let (mut all_adjustments, camera_profile) =
+        crate::camera_profile::render_adjustments(js_adjustments, path, is_raw, &settings);
     all_adjustments.global.show_clipping = 0;
 
     let lut_path = js_adjustments["lutPath"].as_str();
@@ -1000,7 +999,6 @@ fn process_image_for_export_pipeline(
 
     let unique_hash = calculate_full_job_hash(path, js_adjustments);
 
-    let camera_profile = crate::camera_profile::for_render(path, &all_adjustments, &settings);
     process_and_get_dynamic_image_with_precision(
         context,
         state,
@@ -1305,13 +1303,15 @@ fn export_masks_for_image(
 
     if !mask_bitmaps.is_empty() {
         let settings = load_settings(app_handle.clone()).unwrap_or_default();
-        let tm_override = resolve_tonemapper_override(&settings, is_raw);
-        let all_adjustments = get_all_adjustments_from_json(js_adjustments, is_raw, as_shot_white_balance(source_path_str), tm_override);
+        let (all_adjustments, camera_profile) = crate::camera_profile::render_adjustments(
+            js_adjustments,
+            source_path_str,
+            is_raw,
+            &settings,
+        );
         let lut_path = js_adjustments["lutPath"].as_str();
         let lut = lut_path.and_then(|p| get_or_load_lut(state, p).ok());
         let unique_hash = calculate_full_job_hash(source_path_str, js_adjustments);
-        let camera_profile =
-            crate::camera_profile::for_render(source_path_str, &all_adjustments, &settings);
         let output_dir = output_path_obj.parent().unwrap_or(output_path_obj);
         let stem = output_path_obj
             .file_stem()
@@ -2176,12 +2176,11 @@ pub async fn estimate_export_sizes(
             })
             .collect();
 
-        let tm_override = resolve_tonemapper_override_from_handle(&app_handle, is_raw);
-        let mut all_adjustments = get_all_adjustments_from_json(
+        let (mut all_adjustments, camera_profile) = crate::camera_profile::render_adjustments(
             &adjustments_clone,
+            &loaded_image.path,
             is_raw,
-            loaded_image.as_shot_white_balance,
-            tm_override,
+            &settings,
         );
         all_adjustments.global.show_clipping = 0;
 
@@ -2191,8 +2190,6 @@ pub async fn estimate_export_sizes(
         let unique_hash =
             calculate_full_job_hash(&loaded_image.path, &adjustments_clone).wrapping_add(1);
 
-        let camera_profile =
-            crate::camera_profile::for_render(&loaded_image.path, &all_adjustments, &settings);
         let processed_preview = process_and_get_dynamic_image_with_precision(
             &context,
             &state,
@@ -2321,12 +2318,11 @@ pub async fn estimate_export_sizes(
             })
             .collect();
 
-        let tm_override = resolve_tonemapper_override_from_handle(&app_handle, is_raw);
-        let mut all_adjustments = get_all_adjustments_from_json(
+        let (mut all_adjustments, camera_profile) = crate::camera_profile::render_adjustments(
             &js_adjustments,
+            &source_path_str,
             is_raw,
-            as_shot_white_balance(&source_path_str),
-            tm_override,
+            &settings,
         );
         all_adjustments.global.show_clipping = 0;
 
@@ -2336,8 +2332,6 @@ pub async fn estimate_export_sizes(
         let unique_hash =
             calculate_full_job_hash(&source_path_str, &js_adjustments).wrapping_add(1);
 
-        let camera_profile =
-            crate::camera_profile::for_render(&source_path_str, &all_adjustments, &settings);
         let processed_preview = process_and_get_dynamic_image_with_precision(
             &context,
             &state,

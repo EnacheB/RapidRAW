@@ -290,15 +290,11 @@ fn develop_internal(
     // Colour is applied here rather than in rawler's Calibrate step, so highlights
     // can be rebuilt in camera RGB first: the camera's own profile when there is
     // one, else rawler's generic matrix.
-    let [r, g, b, _] = raw_image.wb_coeffs;
-    let wb = if r.is_nan() { [1.0; 3] } else { [r, g, b] };
-    let calibration = if !apply_calibration {
+    let calibration = if is_linear_format && !apply_calibration {
         None
     } else {
-        use_camera_profiles
-            .then(|| crate::camera_profile::for_raw(&raw_image).and_then(|p| p.calibration(wb)))
-            .flatten()
-            .or_else(|| crate::camera_profile::Calibration::from_raw_matrix(&raw_image))
+        crate::camera_profile::Shot::from_raw(&raw_image)
+            .map(|shot| shot.calibration(use_camera_profiles))
     };
     if calibration.is_some() {
         developer
@@ -349,7 +345,12 @@ fn develop_internal(
                 }
             });
             if let Some(calibration) = &calibration {
-                reconstruct_highlights(&mut pixels.data, width as usize, height as usize, wb);
+                reconstruct_highlights(
+                    &mut pixels.data,
+                    width as usize,
+                    height as usize,
+                    calibration.wb,
+                );
                 pixels.data.par_iter_mut().for_each(|p| {
                     *p = calibration.apply(*p).map(|v| v.min(clamp_limit));
                 });

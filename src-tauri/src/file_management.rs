@@ -37,7 +37,7 @@ use crate::image_loader;
 use crate::image_processing::GpuContext;
 use crate::image_processing::{
     Crop, ImageFlag, ImageMetadata, apply_coarse_rotation, apply_cpu_default_raw_processing,
-    apply_crop, apply_flip, apply_geometry_warp, apply_rotation, get_all_adjustments_from_json,
+    apply_crop, apply_flip, apply_geometry_warp, apply_rotation,
 };
 use crate::mask_generation::MaskDefinition;
 use crate::preset_converter;
@@ -1709,12 +1709,11 @@ pub fn generate_thumbnail_data(
             })
             .collect();
 
-        let tm_override = crate::image_processing::resolve_tonemapper_override(&settings, is_raw);
-        let gpu_adjustments = get_all_adjustments_from_json(
+        let (gpu_adjustments, camera_profile) = crate::camera_profile::render_adjustments(
             &meta.adjustments,
+            path_str,
             is_raw,
-            crate::white_balance::as_shot_white_balance(&source_path_str),
-            tm_override,
+            &settings,
         );
         let lut_path = meta.adjustments["lutPath"].as_str();
         let lut = lut_path.and_then(|p| {
@@ -1735,8 +1734,6 @@ pub fn generate_thumbnail_data(
         meta.adjustments.to_string().hash(&mut hasher);
         let unique_hash = hasher.finish();
 
-        let camera_profile =
-            crate::camera_profile::for_render(path_str, &gpu_adjustments, &settings);
         if let Ok(processed_image) = gpu_processing::process_and_get_dynamic_image(
             context,
             &state,

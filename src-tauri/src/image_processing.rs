@@ -1522,6 +1522,13 @@ impl Default for GpuMat3 {
     }
 }
 
+impl GpuMat3 {
+    pub fn from_rows(m: [[f32; 3]; 3]) -> Self {
+        let col = |c: usize| [m[0][c], m[1][c], m[2][c], 0.0];
+        Self { col0: col(0), col1: col(1), col2: col(2) }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Pod, Zeroable, Default)]
 #[repr(C)]
 pub struct GlobalAdjustments {
@@ -1577,6 +1584,9 @@ pub struct GlobalAdjustments {
     pub agx_rendering_to_pipe_matrix: GpuMat3,
     pub wb_rgb_to_lms_matrix: GpuMat3,
     pub wb_lms_to_rgb_matrix: GpuMat3,
+    /// The global white balance in camera RGB, working space to working space; set by
+    /// `camera_profile::render_adjustments` for RAWs, identity otherwise.
+    pub wb_camera: GpuMat3,
 
     _pad_cg1: f32,
     _pad_cg2: f32,
@@ -2382,6 +2392,7 @@ fn get_global_adjustments_from_json(
         agx_rendering_to_pipe_matrix: rendering_to_pipe,
         wb_rgb_to_lms_matrix: mat3_to_gpu_mat3(rgb_to_lms),
         wb_lms_to_rgb_matrix: mat3_to_gpu_mat3(rgb_to_lms.inverse()),
+        wb_camera: GpuMat3::default(),
 
         _pad_cg1: 0.0,
         _pad_cg2: 0.0,
@@ -2591,17 +2602,22 @@ fn get_mask_adjustments_from_json(
     }
 }
 
+/// The white the edit asks for: the shot's own, unless the Color section sets another.
+pub fn target_white_balance(js_adjustments: &serde_json::Value, as_shot: WhiteBalance) -> WhiteBalance {
+    if is_section_visible(js_adjustments, "color") {
+        white_balance::from_adjustments(js_adjustments, as_shot)
+    } else {
+        as_shot
+    }
+}
+
 pub fn get_all_adjustments_from_json(
     js_adjustments: &serde_json::Value,
     is_raw: bool,
     as_shot_white_balance: WhiteBalance,
     tonemapper_override: Option<u32>,
 ) -> AllAdjustments {
-    let target_white_balance = if is_section_visible(js_adjustments, "color") {
-        white_balance::from_adjustments(js_adjustments, as_shot_white_balance)
-    } else {
-        as_shot_white_balance
-    };
+    let target_white_balance = target_white_balance(js_adjustments, as_shot_white_balance);
     let global = get_global_adjustments_from_json(
         js_adjustments,
         is_raw,

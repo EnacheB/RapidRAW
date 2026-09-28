@@ -1960,3 +1960,56 @@ pub struct AiDepthMaskParameters {
     #[serde(default)]
     pub orientation_steps: Option<u8>,
 }
+
+/// Dev harness: the full-resolution AI mask the app would store for `kind`
+/// ("sky", "foreground", "depth", or "subject" with a box in image pixels), as
+/// the PNG data URL that goes into a sub-mask's `maskDataBase64`. The models see
+/// what they see in the editor for a photo without geometry edits, decoded with
+/// camera profiles on.
+pub fn dev_ai_mask(path: &str, kind: &str, rect: (f64, f64, f64, f64)) -> Result<String, String> {
+    let settings = crate::app_settings::AppSettings {
+        use_camera_profiles: Some(true),
+        ..Default::default()
+    };
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let original =
+        crate::image_loader::load_base_image_from_bytes(&bytes, path, false, &settings, None)
+            .map_err(|e| e.to_string())?;
+    let is_raw = crate::formats::is_raw_file(path);
+    let image =
+        crate::mask_generation::build_full_warped_image(&original, is_raw, &serde_json::json!({}))
+            .into_owned();
+    drop(original);
+    let models = std::path::PathBuf::from(std::env::var("HOME").map_err(|e| e.to_string())?)
+        .join(".local/share/io.github.CyberTimon.RapidRAW/models");
+    let _ = ort::init().with_name("AI").commit();
+    let session = |f: &str| -> Result<Mutex<Session>, String> {
+        Ok(Mutex::new(
+            Session::builder()
+                .and_then(|b| b.commit_from_file(models.join(f)))
+                .map_err(|e| format!("{f}: {e}"))?,
+        ))
+    };
+    let mask = match kind {
+        "sky" => run_sky_seg_model(&image, &session(SKYSEG_FILENAME)?),
+        "foreground" => run_u2netp_model(&image, &session(U2NETP_FILENAME)?),
+        // As generate_ai_depth_mask stores it: the model's map at full size.
+        "depth" => run_depth_anything_model(&image, &session(DEPTH_FILENAME)?).map(|depth| {
+            imageops::resize(&depth, image.width(), image.height(), FilterType::Triangle)
+        }),
+        "subject" => {
+            let embeddings = generate_image_embeddings(&image, &session(ENCODER_FILENAME)?)
+                .map_err(|e| e.to_string())?;
+            run_sam_decoder(
+                &session(DECODER_FILENAME)?,
+                &embeddings,
+                (rect.0, rect.1),
+                (rect.2, rect.3),
+                Some(&image),
+            )
+        }
+        _ => return Err(format!("unknown mask kind {kind}")),
+    }
+    .map_err(|e| e.to_string())?;
+    crate::ai_commands::encode_to_base64_png(&mask)
+}

@@ -31,6 +31,19 @@ fn prepare_source_image(
     current_adjustments: &Value,
     state: &tauri::State<'_, AppState>,
 ) -> Result<(DynamicImage, bool), String> {
+    let is_raw = is_raw(state);
+    let (base_image, _) = crate::get_original_image(state)?;
+    let source_image = source_image(&base_image, is_raw, patch_id, current_adjustments)?;
+    Ok((source_image, is_raw))
+}
+
+/// prepare_source_image for the decoded photo `base_image`.
+pub fn source_image(
+    base_image: &DynamicImage,
+    is_raw: bool,
+    patch_id: &str,
+    current_adjustments: &Value,
+) -> Result<DynamicImage, String> {
     let mut source_image_adjustments = current_adjustments.clone();
     if let Some(patches) = source_image_adjustments
         .get_mut("aiPatches")
@@ -39,13 +52,10 @@ fn prepare_source_image(
         patches.retain(|p| p.get("id").and_then(|id| id.as_str()) != Some(patch_id));
     }
 
-    let is_raw = is_raw(state);
-
-    let (base_image, _) = crate::get_original_image(state)?;
-    let composited = composite_patches_on_image(&base_image, &source_image_adjustments)
+    let composited = composite_patches_on_image(base_image, &source_image_adjustments)
         .map_err(|e| format!("Failed to prepare source image: {}", e))?;
 
-    let source_image = if is_raw {
+    Ok(if is_raw {
         let mut linear = composited.into_rgba32f();
         linear.par_chunks_mut(4).for_each(|p| {
             for v in &mut p[..3] {
@@ -55,9 +65,7 @@ fn prepare_source_image(
         apply_linear_to_srgb(DynamicImage::ImageRgba32F(linear))
     } else {
         composited
-    };
-
-    Ok((source_image, is_raw))
+    })
 }
 
 fn calculate_mask_bounds(
@@ -158,6 +166,43 @@ pub async fn generate_manual_cleanup_patch(
 ) -> Result<String, String> {
     let (source_image, _) =
         prepare_source_image(&patch_definition.id, &current_adjustments, &state)?;
+    let warped_image = resolve_warped_image_for_masks(
+        &state,
+        &current_adjustments,
+        std::slice::from_ref(&cleanup_mask_definition(&patch_definition)),
+    );
+    cleanup_patch(
+        &source_image,
+        &patch_definition,
+        &current_adjustments,
+        source_point,
+        warped_image.as_deref(),
+    )
+    .map(|patch| patch.to_string())
+}
+
+fn cleanup_mask_definition(patch_definition: &AiPatchDefinition) -> MaskDefinition {
+    MaskDefinition {
+        id: patch_definition.id.clone(),
+        name: patch_definition.name.clone(),
+        visible: patch_definition.visible,
+        invert: patch_definition.invert,
+        opacity: 100.0,
+        adjustments: serde_json::Value::Null,
+        sub_masks: patch_definition.sub_masks.clone(),
+    }
+}
+
+/// The recipe Heal or Clone stores as a patch's patchData: the painted area, and
+/// how far away it copies from (picked if `source_point` is None).
+/// `source_image` is prepare_source_image's.
+pub fn cleanup_patch(
+    source_image: &DynamicImage,
+    patch_definition: &AiPatchDefinition,
+    current_adjustments: &Value,
+    source_point: Option<(f64, f64)>,
+    warped_image: Option<&DynamicImage>,
+) -> Result<Value, String> {
     let (img_w, img_h) = source_image.dimensions();
 
     let orientation_steps = current_adjustments
@@ -170,34 +215,18 @@ pub async fn generate_manual_cleanup_patch(
         (img_w, img_h)
     };
 
-    let mask_def_for_generation = MaskDefinition {
-        id: patch_definition.id.clone(),
-        name: patch_definition.name.clone(),
-        visible: patch_definition.visible,
-        invert: patch_definition.invert,
-        opacity: 100.0,
-        adjustments: serde_json::Value::Null,
-        sub_masks: patch_definition.sub_masks.clone(),
-    };
-
-    let warped_image = resolve_warped_image_for_masks(
-        &state,
-        &current_adjustments,
-        std::slice::from_ref(&mask_def_for_generation),
-    );
-
     let mask_bitmap = generate_mask_bitmap(
-        &mask_def_for_generation,
+        &cleanup_mask_definition(patch_definition),
         trans_w,
         trans_h,
         1.0,
         (0.0, 0.0),
-        warped_image.as_deref(),
+        warped_image,
     )
     .ok_or("Failed to generate mask bitmap for manual cleanup")?;
 
     let mask_bitmap =
-        crate::image_processing::inverse_transform_mask(mask_bitmap, &current_adjustments);
+        crate::image_processing::inverse_transform_mask(mask_bitmap, current_adjustments);
 
     let (min_x, max_x, min_y, max_y) = calculate_mask_bounds(&mask_bitmap)?;
 
@@ -234,7 +263,7 @@ pub async fn generate_manual_cleanup_patch(
                 y,
                 trans_w as f64,
                 trans_h as f64,
-                &current_adjustments,
+                current_adjustments,
             );
             let offset_x = (ux - center_x).round() as i32;
             let offset_y = (uy - center_y).round() as i32;
@@ -256,7 +285,7 @@ pub async fn generate_manual_cleanup_patch(
                 center_y + offset_y as f64,
                 trans_w as f64,
                 trans_h as f64,
-                &current_adjustments,
+                current_adjustments,
             );
             (offset_x, offset_y, Some(picked))
         }
@@ -283,7 +312,7 @@ pub async fn generate_manual_cleanup_patch(
     if let Some((x, y)) = picked_source {
         result["sourcePoint"] = serde_json::json!([x, y]);
     }
-    Ok(result.to_string())
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]

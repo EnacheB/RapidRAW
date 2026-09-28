@@ -107,6 +107,8 @@ pub struct AiPatchDefinition {
     pub name: String,
     pub visible: bool,
     pub invert: bool,
+    // Only generative replace uses it.
+    #[serde(default)]
     pub prompt: String,
     #[serde(default)]
     pub patch_data: Option<PatchData>,

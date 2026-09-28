@@ -2400,3 +2400,125 @@ fn process_and_get_dynamic_image_inner(
         }
     }
 }
+
+/// Heal and Clone patches written without their recipe (patchData) get the one
+/// the editor makes when they are painted, with the source picked for them.
+fn with_cleanup_recipes(
+    original: &DynamicImage,
+    is_raw: bool,
+    adjustments: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let mut adjustments = adjustments.clone();
+    let count = adjustments["aiPatches"].as_array().map_or(0, |p| p.len());
+    for i in 0..count {
+        let patch = &adjustments["aiPatches"][i];
+        let cleanup = patch["subMasks"].as_array().is_some_and(|sub_masks| {
+            sub_masks
+                .iter()
+                .any(|sm| matches!(sm["type"].as_str(), Some("heal" | "clone")))
+        });
+        if !cleanup || !patch["patchData"].is_null() {
+            continue;
+        }
+        let definition: crate::mask_generation::AiPatchDefinition =
+            serde_json::from_value(patch.clone()).map_err(|e| format!("aiPatches[{i}]: {e}"))?;
+        let source =
+            crate::inpainting::source_image(original, is_raw, &definition.id, &adjustments)?;
+        let recipe =
+            crate::inpainting::cleanup_patch(&source, &definition, &adjustments, None, None)
+                .map_err(|e| format!("aiPatches[{i}]: {e}"))?;
+        adjustments["aiPatches"][i]["patchData"] = recipe;
+    }
+    Ok(adjustments)
+}
+
+/// Harness (examples/render.rs): renders `path` with `adjustments` (the editor's
+/// JSON) as the editor does with camera profiles on: patches, geometry (warps,
+/// crop, rotation) and masks, downscaled to `long_edge` like the preview, then
+/// through the full GPU pipeline on a device of its own.
+#[doc(hidden)]
+pub fn dev_render(
+    path: &str,
+    adjustments: &serde_json::Value,
+    long_edge: u32,
+) -> Result<image::RgbImage, String> {
+    let settings = crate::app_settings::AppSettings {
+        use_camera_profiles: Some(true),
+        ..Default::default()
+    };
+    let is_raw = crate::formats::is_raw_file(path);
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let original =
+        crate::image_loader::load_base_image_from_bytes(&bytes, path, false, &settings, None)
+            .map_err(|e| e.to_string())?;
+    let adjustments = &with_cleanup_recipes(&original, is_raw, adjustments)?;
+    let patched = crate::image_loader::composite_patches_on_image(&original, adjustments)
+        .map_err(|e| e.to_string())?;
+    let (transformed, crop_offset) = crate::adjustment_utils::apply_all_transformations(
+        std::borrow::Cow::Borrowed(&patched),
+        adjustments,
+    );
+    // The editor's preview downscale: image's own resize clamps float pixels to 1.0.
+    let image = crate::image_processing::downscale_f32_image(&transformed, long_edge, long_edge);
+    let scale = image.width() as f32 / transformed.width() as f32;
+    drop(transformed);
+    drop(patched);
+
+    // Unlike the editor, which logs a broken mask and renders without it, fail
+    // with the reason: a hand-written edit should not lose a mask silently.
+    let mask_definitions: Vec<crate::mask_generation::MaskDefinition> = adjustments
+        .get("masks")
+        .map(|m| serde_json::from_value(m.clone()).map_err(|e| format!("masks: {e}")))
+        .transpose()?
+        .unwrap_or_default();
+    let sampled = mask_definitions
+        .iter()
+        .any(|m| m.requires_warped_image())
+        .then(|| crate::mask_generation::build_full_warped_image(&original, is_raw, adjustments).into_owned());
+    drop(original);
+    let mut mask_bitmaps: Vec<ImageBuffer<Luma<u8>, Vec<u8>>> = Vec::new();
+    for def in &mask_definitions {
+        mask_bitmaps.extend(crate::mask_generation::generate_mask_bitmap_strict(
+            def,
+            image.width(),
+            image.height(),
+            scale,
+            (crop_offset.0 * scale, crop_offset.1 * scale),
+            sampled.as_ref(),
+        )?);
+    }
+    let (adjustments, camera_profile) =
+        crate::camera_profile::render_adjustments(adjustments, path, is_raw, &settings);
+
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
+        .map_err(|e| e.to_string())?;
+    let limits = adapter.limits();
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: limits.clone(),
+        ..Default::default()
+    }))
+    .map_err(|e| e.to_string())?;
+    let processor = GpuProcessor::new(GpuContext {
+        device: Arc::new(device),
+        queue: Arc::new(queue),
+        limits,
+        display: Default::default(),
+    })?;
+    let gpu_image = processor.upload(&image, is_raw as u32);
+    let request = RenderRequest {
+        adjustments,
+        mask_bitmaps: &mask_bitmaps,
+        lut: None,
+        roi: None,
+        camera_profile,
+    };
+    let (pixels, w, h) =
+        processor.render_to_cpu(&gpu_image, request, RenderOutputPrecision::EightBit)?;
+    let RenderedPixels::U8(rgba) = pixels else {
+        unreachable!()
+    };
+    let rgba = ImageBuffer::<Rgba<u8>, _>::from_raw(w, h, rgba).ok_or("bad render size")?;
+    Ok(DynamicImage::ImageRgba8(rgba).to_rgb8())
+}

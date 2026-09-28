@@ -123,6 +123,10 @@ pub use adjustment_utils::*;
 pub use android_integration::*;
 pub use app_settings::*;
 pub use app_state::*;
+#[doc(hidden)]
+pub use ai_processing::dev_ai_mask;
+#[doc(hidden)]
+pub use gpu_processing::dev_render;
 pub use launch_request::*;
 use tagging_utils::{candidates, hierarchy};
 

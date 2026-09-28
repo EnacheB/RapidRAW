@@ -1177,29 +1177,6 @@ pub async fn get_camera_profile_name(path: String, app_handle: tauri::AppHandle)
     .flatten()
 }
 
-/// Harness (examples/camera_profile.rs): decodes `path` the way the editor does
-/// with camera profiles on and renders it with the "Profile" tone mapper at
-/// default settings.
-#[doc(hidden)]
-pub fn dev_render(path: &str, long_edge: u32) -> Result<(String, image::RgbImage), String> {
-    let settings = AppSettings {
-        use_camera_profiles: Some(true),
-        ..Default::default()
-    };
-    let profile = for_image(path, &settings).ok_or("no camera profile for this image")?;
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let image =
-        crate::image_loader::load_base_image_from_bytes(&bytes, path, false, &settings, None)
-            .map_err(|e| e.to_string())?
-            .resize(long_edge, long_edge, image::imageops::FilterType::Triangle)
-            .to_rgb32f();
-    let out = image::RgbImage::from_fn(image.width(), image.height(), |x, y| {
-        let c = profile.render(image.get_pixel(x, y).0);
-        image::Rgb(c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
-    });
-    Ok((profile.name.clone(), out))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

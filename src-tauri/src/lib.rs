@@ -30,6 +30,7 @@ mod android_integration;
 mod app_settings;
 mod app_state;
 mod apple_raw;
+mod brush_patches;
 mod cache_utils;
 pub mod camera_match;
 pub mod camera_profile;

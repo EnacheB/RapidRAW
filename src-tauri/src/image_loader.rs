@@ -1,6 +1,7 @@
 use crate::Cursor;
 use crate::app_settings::{AppSettings, load_settings};
 use crate::app_state::{AppState, LoadedImage};
+use crate::brush_patches::{Image, Rendered};
 use crate::exif_processing;
 use crate::file_management::{parse_virtual_path, read_file_mapped};
 use crate::formats::is_raw_file;
@@ -416,6 +417,28 @@ pub fn load_image_with_orientation(
     Ok(DynamicImage::ImageRgb32F(oriented_image.to_rgb32f()))
 }
 
+/// AI inpainting models take sRGB-encoded 0–1 images, but a RAW's base image is
+/// linear light and can exceed 1.0. `encode_highlights` keeps values up to `knee`
+/// as they are and rolls everything above it smoothly into (`knee`, 1), with slope
+/// 1 at the knee; `decode_highlights` inverts it, so bright areas a model fills
+/// come back as bright as their surroundings.
+pub fn encode_highlights(x: f32, knee: f32) -> f32 {
+    if x <= knee {
+        return x;
+    }
+    let t = (x - knee) / (1.0 - knee);
+    knee + (1.0 - knee) * t / (1.0 + t)
+}
+
+pub fn decode_highlights(y: f32, knee: f32) -> f32 {
+    if y <= knee {
+        return y;
+    }
+    // Cap just below 1, where the roll-off reaches infinity.
+    let s = ((y - knee) / (1.0 - knee)).min(0.99);
+    knee + (1.0 - knee) * s / (1.0 - s)
+}
+
 pub fn composite_patches_on_image(
     base_image: &DynamicImage,
     current_adjustments: &Value,
@@ -442,6 +465,9 @@ pub fn composite_patches_on_image(
             }
             patch_obj.get("patchData").is_some_and(|data| {
                 data.get("sourceOffset").is_some()
+                    || patch_obj
+                        .get("subMasks")
+                        .is_some_and(crate::brush_patches::is_brush_patch)
                     || data
                         .get("color")
                         .and_then(|color| color.as_str())
@@ -456,26 +482,26 @@ pub fn composite_patches_on_image(
 
     let (base_w, base_h) = base_image.dimensions();
 
-    /// Where a patch's pixels come from: stored with the edit (AI inpainting,
-    /// 8-bit), or rendered now from the float image (Heal and Clone).
-    enum PatchPixels {
-        Stored {
-            color: image::RgbImage,
-            is_srgb_encoded: bool,
-        },
+    /// A patch ready to apply. Only AI inpainting stores pixels; the other tools
+    /// are rendered from their recipe on the float image as it is when they apply.
+    enum DecodedPatch<'a> {
+        /// AI inpainting.
+        Stored(Rendered),
+        /// Heal or Clone: the spot under `mask` copies from `source_offset` away.
         Spot {
+            origin: (usize, usize),
+            mask: image::GrayImage,
             source_offset: (i32, i32),
             heal: bool,
         },
+        /// Liquify or Retouch, which make their own mask from the strokes.
+        Brush {
+            sub_masks: &'a Value,
+            linear: bool,
+        },
     }
 
-    struct DecodedPatch {
-        offset_x: Option<u32>,
-        offset_y: Option<u32>,
-        mask: image::GrayImage,
-        pixels: PatchPixels,
-    }
-
+    let lut = srgb_to_linear_lut();
     let decoded_patches: Result<Vec<DecodedPatch>> = visible_patches
         .par_iter()
         .map(|patch_obj| {
@@ -494,6 +520,18 @@ pub fn composite_patches_on_image(
                 .get("isSrgbEncoded")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+
+            // Patches from before Liquify and Retouch were recipes also carry stored
+            // pixels; those are ignored and re-rendered from the strokes.
+            if let Some(sub_masks) = patch_obj
+                .get("subMasks")
+                .filter(|sm| crate::brush_patches::is_brush_patch(sm))
+            {
+                return Ok(DecodedPatch::Brush {
+                    sub_masks,
+                    linear: is_srgb_encoded,
+                });
+            }
 
             let mask_bitmap = if let Some(mask_b64) = patch_data
                 .get("mask")
@@ -556,38 +594,50 @@ pub fn composite_patches_on_image(
                 gen_mask
             };
 
-            let pixels = if let Some(offset) = patch_data.get("sourceOffset") {
-                let offset: (i32, i32) = serde_json::from_value(offset.clone())
-                    .context("Invalid sourceOffset")?;
-                PatchPixels::Spot {
-                    source_offset: offset,
+            let origin = (offset_x.unwrap_or(0) as usize, offset_y.unwrap_or(0) as usize);
+            if let Some(offset) = patch_data.get("sourceOffset") {
+                return Ok(DecodedPatch::Spot {
+                    origin,
+                    mask: mask_bitmap,
+                    source_offset: serde_json::from_value(offset.clone())
+                        .context("Invalid sourceOffset")?,
                     heal: patch_data.get("heal").and_then(|v| v.as_bool()).unwrap_or(false),
-                }
-            } else {
-                let color_b64 = patch_data
-                    .get("color")
-                    .and_then(|v| v.as_str())
-                    .context("Missing color data")?;
-                let color_bytes = general_purpose::STANDARD.decode(color_b64)?;
-                let color = image::load_from_memory(&color_bytes)?.to_rgb8();
-                let (patch_w, patch_h) = color.dimensions();
-                let color = if !is_cropped && (base_w != patch_w || base_h != patch_h) {
-                    imageops::resize(&color, base_w, base_h, imageops::FilterType::Lanczos3)
-                } else {
-                    color
-                };
-                PatchPixels::Stored {
-                    color,
-                    is_srgb_encoded,
-                }
-            };
+                });
+            }
 
-            Ok(DecodedPatch {
-                offset_x,
-                offset_y,
+            let color_b64 = patch_data
+                .get("color")
+                .and_then(|v| v.as_str())
+                .context("Missing color data")?;
+            let color_bytes = general_purpose::STANDARD.decode(color_b64)?;
+            let color = image::load_from_memory(&color_bytes)?.to_rgb8();
+            let (patch_w, patch_h) = color.dimensions();
+            let color = if !is_cropped && (base_w != patch_w || base_h != patch_h) {
+                imageops::resize(&color, base_w, base_h, imageops::FilterType::Lanczos3)
+            } else {
+                color
+            };
+            let highlight_knee = patch_data
+                .get("highlightKnee")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as f32);
+            let colors = color
+                .pixels()
+                .map(|p| {
+                    if !is_srgb_encoded {
+                        return p.0.map(|v| v as f32 / 255.0);
+                    }
+                    p.0.map(|v| match highlight_knee {
+                        Some(knee) => decode_highlights(lut[v as usize], knee),
+                        None => lut[v as usize],
+                    })
+                })
+                .collect();
+            Ok(DecodedPatch::Stored(Rendered {
+                origin,
                 mask: mask_bitmap,
-                pixels,
-            })
+                colors,
+            }))
         })
         .collect();
 
@@ -596,49 +646,48 @@ pub fn composite_patches_on_image(
     // Patches apply in order, each on top of the ones before it, in linear float RGBA.
     let mut image = base_image.to_rgba32f();
     let width = base_w as usize;
-    let lut = srgb_to_linear_lut();
 
     for patch in decoded_patches {
-        let origin = (
-            patch.offset_x.unwrap_or(0) as usize,
-            patch.offset_y.unwrap_or(0) as usize,
-        );
-        let patch_w = patch.mask.width() as usize;
+        let source = Image {
+            pixels: image.as_raw(),
+            width,
+            height: base_h as usize,
+        };
+        let rendered = match patch {
+            DecodedPatch::Stored(rendered) => Some(rendered),
+            DecodedPatch::Spot {
+                origin,
+                mask,
+                source_offset,
+                heal,
+            } => Some(crate::heal_source::render_spot(
+                &source,
+                mask,
+                origin,
+                source_offset,
+                heal,
+            )),
+            DecodedPatch::Brush { sub_masks, linear } => {
+                crate::brush_patches::render(&source, sub_masks, linear)
+            }
+        };
+        let Some(Rendered {
+            origin,
+            mask,
+            colors,
+        }) = rendered
+        else {
+            continue;
+        };
+
+        let patch_w = mask.width() as usize;
         let crop_w = patch_w.min(width.saturating_sub(origin.0));
-        let crop_h = (patch.mask.height() as usize).min((base_h as usize).saturating_sub(origin.1));
+        let crop_h = (mask.height() as usize).min((base_h as usize).saturating_sub(origin.1));
         if crop_w == 0 || crop_h == 0 {
             continue;
         }
 
-        let colors: Vec<[f32; 3]> = match &patch.pixels {
-            PatchPixels::Spot {
-                source_offset,
-                heal,
-            } => crate::heal_source::render_spot(
-                image.as_raw(),
-                width,
-                base_h as usize,
-                &patch.mask,
-                origin,
-                *source_offset,
-                *heal,
-            ),
-            PatchPixels::Stored {
-                color,
-                is_srgb_encoded,
-            } => color
-                .pixels()
-                .map(|p| {
-                    if *is_srgb_encoded {
-                        p.0.map(|v| lut[v as usize])
-                    } else {
-                        p.0.map(|v| v as f32 / 255.0)
-                    }
-                })
-                .collect(),
-        };
-
-        let mask = patch.mask.as_raw();
+        let mask = mask.as_raw();
         image
             .par_chunks_mut(width * 4)
             .skip(origin.1)
@@ -878,5 +927,40 @@ mod tests {
         let out = composite_patches_on_image(&base, &adjustments).unwrap().to_rgba32f();
         assert_eq!(out.get_pixel(6, 9)[0], 2.0);
         assert_eq!(out.get_pixel(2, 9)[0], 3.0);
+    }
+
+    #[test]
+    fn retouch_keeps_highlights_above_white() {
+        // A retouch stroke over a bright area (3.0) with a darker edge must smooth
+        // in float, not clip to 1.0 as the old 8-bit patch did.
+        let base = DynamicImage::ImageRgba32F(ImageBuffer::from_fn(60, 60, |x, _| {
+            let v = if x < 40 { 3.0 } else { 0.5 };
+            Rgba([v, v, v, 1.0])
+        }));
+        let adjustments = serde_json::json!({ "aiPatches": [{
+            "id": "retouch",
+            "visible": true,
+            "patchData": { "isSrgbEncoded": true },
+            "subMasks": [{ "type": "retouch", "parameters": { "intensity": 100,
+                "lines": [{ "brushSize": 20, "feather": 0.5, "points": [{ "x": 20, "y": 30 }] }] } }]
+        }]});
+        let out = composite_patches_on_image(&base, &adjustments).unwrap().to_rgba32f();
+        assert!((out.get_pixel(20, 30)[0] - 3.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn ai_patch_highlights_survive_8_bit_storage() {
+        // What an AI patch goes through: rolled off, sRGB-encoded to 8 bits for the
+        // model and PNG, then decoded. 2.0 must come back within 0.1 EV (8 bits
+        // leave few codes above the knee), and values under the knee must match
+        // plain 8-bit sRGB.
+        let knee = 0.8;
+        let store = |x: f32| {
+            let y = encode_highlights(x, knee);
+            let e = if y <= 0.003_130_8 { y * 12.92 } else { 1.055 * y.powf(1.0 / 2.4) - 0.055 };
+            decode_highlights(srgb_to_linear_lut()[(e * 255.0).round() as usize], knee)
+        };
+        assert!((store(2.0) / 2.0).log2().abs() < 0.1, "{}", store(2.0));
+        assert!((store(0.18) - 0.18).abs() < 0.002);
     }
 }

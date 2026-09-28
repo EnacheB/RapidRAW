@@ -38,8 +38,8 @@ const TRANSFORM_KEYS = [
 export const PIPELINE_STAGES: PipelineStage[] = [
   { id: 'decodeImage', phase: 'decode', fixed: true },
   { id: 'demosaic', phase: 'decode', fixed: true },
-  { id: 'cameraColor', phase: 'decode', fixed: true },
   { id: 'highlightRecovery', phase: 'decode', fixed: true },
+  { id: 'cameraColor', phase: 'decode', fixed: true },
   { id: 'embeddedLens', phase: 'decode', fixed: true },
   { id: 'rawPreprocessing', phase: 'decode', fixed: true },
 

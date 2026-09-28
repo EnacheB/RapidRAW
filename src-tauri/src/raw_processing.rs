@@ -72,66 +72,148 @@ fn srgb_to_linear(value: f32) -> f32 {
     }
 }
 
-#[inline]
-fn smootherstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+/// Where a channel counts as clipped, as a fraction of the white level.
+const CLIP: f32 = 0.987;
+
+/// Rebuilds clipped highlights in demosaiced camera RGB (not white balanced, 1.0
+/// = white level) with "inpaint opposed", darktable's default method, which
+/// RawTherapee also offers. Only channels at the white level change, and only
+/// upwards: each gets the mean of the other two channels around it (white
+/// balanced by `wb`), plus the average amount by which that estimate misses the
+/// real value in unclipped pixels next to clipped ones, so a blown sky keeps its
+/// tint instead of turning magenta.
+fn reconstruct_highlights(pixels: &mut [[f32; 3]], width: usize, height: usize, wb: [f32; 3]) {
+    // Bit c is set where channel c is clipped.
+    let mask: Vec<u8> = pixels
+        .par_iter()
+        .map(|p| (0..3).fold(0, |m, c| m | (((p[c] >= CLIP) as u8) << c)))
+        .collect();
+    if !mask.par_iter().any(|&m| m != 0) {
+        return;
+    }
+    for (i, p) in opposed_fill(pixels, &mask, width, height, wb) {
+        pixels[i] = p;
+    }
 }
 
-#[inline]
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
+/// The new value of every pixel with a clipped channel, for `reconstruct_highlights`.
+fn opposed_fill(
+    pixels: &[[f32; 3]],
+    mask: &[u8],
+    width: usize,
+    height: usize,
+    wb: [f32; 3],
+) -> Vec<(usize, [f32; 3])> {
+    let clip = wb.map(|w| CLIP * w);
+    // RawTherapee's floor for pixels that inform the tint (green is denser).
+    let dark = [0.03 * clip[0], 0.125 * clip[1], 0.03 * clip[2]];
+    let value = |x: usize, y: usize, c: usize| pixels[y * width + x][c].max(0.0) * wb[c];
+    // Each channel estimated as the mean of the other two over the 3x3
+    // neighbourhood, averaged as cube roots.
+    let opposed = |x: usize, y: usize| -> [f32; 3] {
+        let (mut mean, mut n) = ([0.0f32; 3], 0.0);
+        for yy in y.saturating_sub(1)..=(y + 1).min(height - 1) {
+            for xx in x.saturating_sub(1)..=(x + 1).min(width - 1) {
+                for (c, m) in mean.iter_mut().enumerate() {
+                    *m += value(xx, yy, c);
+                }
+                n += 1.0;
+            }
+        }
+        let root = mean.map(|m| (m / n).cbrt());
+        [0, 1, 2].map(|c| (0.5 * (root[(c + 1) % 3] + root[(c + 2) % 3])).powi(3))
+    };
+
+    // The tint: how far the estimate is from the truth, per channel, in unclipped
+    // pixels within 3 pixels of that channel clipping.
+    let near = dilate(mask, width, height, 3);
+    let (sum, count) = (0..height)
+        .into_par_iter()
+        .map(|y| {
+            let (mut sum, mut count) = ([0.0f64; 3], [0u32; 3]);
+            for x in 0..width {
+                let near = near[y * width + x];
+                if near == 0 {
+                    continue;
+                }
+                let mut estimate = None;
+                for c in 0..3 {
+                    let v = value(x, y, c);
+                    if near & (1 << c) != 0 && v > dark[c] && v < clip[c] {
+                        let e = estimate.get_or_insert_with(|| opposed(x, y));
+                        sum[c] += (v - e[c]) as f64;
+                        count[c] += 1;
+                    }
+                }
+            }
+            (sum, count)
+        })
+        .reduce(
+            || ([0.0; 3], [0; 3]),
+            |a, b| {
+                (
+                    std::array::from_fn(|c| a.0[c] + b.0[c]),
+                    std::array::from_fn(|c| a.1[c] + b.1[c]),
+                )
+            },
+        );
+    let tint: [f32; 3] = std::array::from_fn(|c| (sum[c] / count[c].max(1) as f64) as f32);
+
+    (0..height)
+        .into_par_iter()
+        .flat_map_iter(|y| {
+            (0..width).filter_map(move |x| {
+                let i = y * width + x;
+                if mask[i] == 0 {
+                    return None;
+                }
+                let e = opposed(x, y);
+                let clipped = |c: usize| mask[i] & (1 << c) != 0;
+                let mut p = pixels[i];
+                for c in (0..3).filter(|&c| clipped(c)) {
+                    p[c] = p[c].max((e[c] + tint[c]) / wb[c]);
+                }
+                // With two or three channels clipped, the estimates lean on clipped
+                // values, which are only lower bounds, so the one channel still read
+                // (or, with all three clipped, the white balance) set the colour:
+                // blown clouds and a blown sun came out pink. A clipped channel is
+                // at least as bright as the channel still read, and a pixel with
+                // nothing left to read is neutral.
+                if mask[i].count_ones() >= 2 {
+                    let read = (0..3).filter(|&c| !clipped(c));
+                    let floor = if mask[i] == 0b111 {
+                        (0..3).map(|c| p[c] * wb[c]).fold(0.0f32, f32::max)
+                    } else {
+                        read.map(|c| p[c] * wb[c]).fold(0.0f32, f32::max)
+                    };
+                    for c in (0..3).filter(|&c| clipped(c)) {
+                        p[c] = p[c].max(floor / wb[c]);
+                    }
+                }
+                Some((i, p))
+            })
+        })
+        .collect()
 }
 
-#[inline]
-fn recover_clipped_pixel(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
-    let max_c = r.max(g).max(b);
-
-    if max_c <= 0.50 {
-        return (r, g, b);
-    }
-
-    let mut cur_r = r;
-    let mut cur_g = g;
-    let mut cur_b = b;
-
-    let outer_blend = smootherstep(0.50, 1.5, max_c);
-
-    let magenta = (cur_r.min(cur_b) - cur_g).max(0.0);
-    if magenta > 0.0 {
-        let target_g = cur_r.min(cur_b) * 0.80 + ((cur_r + cur_b) * 0.5) * 0.20;
-        let correction = (target_g - cur_g).max(0.0);
-        let magenta_weight = smoothstep(0.0, 0.25, magenta / max_c);
-        cur_g += correction * outer_blend * magenta_weight;
-    }
-
-    let residual = (cur_r.min(cur_b) - cur_g).max(0.0);
-    if residual > 0.0 {
-        cur_g += residual * outer_blend;
-    }
-
-    let new_max = cur_r.max(cur_g).max(cur_b);
-    let min_c = cur_r.min(cur_g).min(cur_b);
-
-    let knee = smoothstep(0.50, 1.5, new_max);
-
-    if knee > 0.0 {
-        let neutrality = (min_c / new_max.max(1e-5)).clamp(0.0, 1.0);
-
-        let core_burn = smoothstep(0.60, 3.0, new_max);
-
-        let desat = (knee * (neutrality * 0.85 + core_burn * 0.15)).clamp(0.0, 1.0);
-        let smooth_desat = desat * desat * (3.0 - 2.0 * desat);
-
-        let neutral_value = min_c + (new_max - min_c) * 1.0;
-
-        cur_r = cur_r * (1.0 - smooth_desat) + neutral_value * smooth_desat;
-        cur_g = cur_g * (1.0 - smooth_desat) + neutral_value * smooth_desat;
-        cur_b = cur_b * (1.0 - smooth_desat) + neutral_value * smooth_desat;
-    }
-
-    (cur_r, cur_g, cur_b)
+/// `mask` OR-ed over a (2r+1)-pixel square around each pixel.
+fn dilate(mask: &[u8], width: usize, height: usize, r: usize) -> Vec<u8> {
+    let mut rows = vec![0u8; mask.len()];
+    rows.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
+        let src = &mask[y * width..(y + 1) * width];
+        for (x, out) in row.iter_mut().enumerate() {
+            *out = src[x.saturating_sub(r)..=(x + r).min(width - 1)].iter().fold(0, |a, b| a | b);
+        }
+    });
+    let mut out = vec![0u8; mask.len()];
+    out.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
+        for yy in y.saturating_sub(r)..=(y + r).min(height - 1) {
+            for (o, v) in row.iter_mut().zip(&rows[yy * width..(yy + 1) * width]) {
+                *o |= v;
+            }
+        }
+    });
+    out
 }
 
 fn develop_internal(
@@ -205,14 +287,18 @@ fn develop_internal(
     raw_image.wb_coeffs =
         crate::multi_exposure::neutralize_wb_if_multiexposure(raw_image.wb_coeffs, file_bytes);
 
-    // The camera's own profile, when there is one, replaces rawler's generic matrix.
-    let calibration = if use_camera_profiles {
-        crate::camera_profile::for_raw(&raw_image).and_then(|profile| {
-            let [r, g, b, _] = raw_image.wb_coeffs;
-            profile.calibration([r, g, b])
-        })
-    } else {
+    // Colour is applied here rather than in rawler's Calibrate step, so highlights
+    // can be rebuilt in camera RGB first: the camera's own profile when there is
+    // one, else rawler's generic matrix.
+    let [r, g, b, _] = raw_image.wb_coeffs;
+    let wb = if r.is_nan() { [1.0; 3] } else { [r, g, b] };
+    let calibration = if !apply_calibration {
         None
+    } else {
+        use_camera_profiles
+            .then(|| crate::camera_profile::for_raw(&raw_image).and_then(|p| p.calibration(wb)))
+            .flatten()
+            .or_else(|| crate::camera_profile::Calibration::from_raw_matrix(&raw_image))
     };
     if calibration.is_some() {
         developer
@@ -255,26 +341,23 @@ fn develop_internal(
         }
         Intermediate::ThreeColor(pixels) => {
             pixels.data.par_iter_mut().for_each(|p| {
-                let mut r = (p[0] * rescale_factor).max(0.0);
-                let mut g = (p[1] * rescale_factor).max(0.0);
-                let mut b = (p[2] * rescale_factor).max(0.0);
-
-                if let Some(calibration) = &calibration {
-                    [r, g, b] = calibration.apply([r, g, b]);
+                for v in p.iter_mut() {
+                    *v = (*v * rescale_factor).max(0.0);
+                    if is_linear_format && apply_ungamma {
+                        *v = srgb_to_linear(*v);
+                    }
                 }
-
-                if is_linear_format && apply_ungamma {
-                    r = srgb_to_linear(r.max(0.0));
-                    g = srgb_to_linear(g.max(0.0));
-                    b = srgb_to_linear(b.max(0.0));
-                }
-
-                let (rec_r, rec_g, rec_b) = recover_clipped_pixel(r, g, b);
-
-                p[0] = rec_r.clamp(0.0, clamp_limit);
-                p[1] = rec_g.clamp(0.0, clamp_limit);
-                p[2] = rec_b.clamp(0.0, clamp_limit);
             });
+            if let Some(calibration) = &calibration {
+                reconstruct_highlights(&mut pixels.data, width as usize, height as usize, wb);
+                pixels.data.par_iter_mut().for_each(|p| {
+                    *p = calibration.apply(*p).map(|v| v.min(clamp_limit));
+                });
+            } else {
+                pixels.data.par_iter_mut().for_each(|p| {
+                    *p = p.map(|v| v.min(clamp_limit));
+                });
+            }
         }
         Intermediate::FourColor(pixels) => {
             pixels.data.iter_mut().for_each(|p| {
@@ -379,4 +462,59 @@ pub fn get_fast_demosaic_scale_factor(
         }
     }
     1.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opposed_rebuilds_only_clipped_channels() {
+        // A neutral scene under white balance [2, 1, 1.5]: grey 0.6 around a bright
+        // grey 1.3 square, where green (only) hits the white level. Unfixed, the
+        // square is magenta; rebuilt, green rises towards red and blue, and nothing
+        // else changes.
+        let (w, h) = (24, 24);
+        let wb = [2.0, 1.0, 1.5];
+        let camera = |grey: f32| [grey / wb[0], (grey / wb[1]).min(1.0), grey / wb[2]];
+        let mut pixels: Vec<[f32; 3]> = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                camera(if (9..15).contains(&x) && (9..15).contains(&y) { 1.3 } else { 0.6 })
+            })
+            .collect();
+        let before = pixels.clone();
+        reconstruct_highlights(&mut pixels, w, h, wb);
+
+        let centre = pixels[12 * w + 12];
+        assert!(centre[1] > 1.2, "green not rebuilt: {centre:?}");
+        assert_eq!([centre[0], centre[2]], [before[12 * w + 12][0], before[12 * w + 12][2]]);
+        for (p, q) in pixels.iter().zip(&before) {
+            if q[1] < CLIP {
+                assert_eq!(p, q);
+            }
+        }
+    }
+
+    #[test]
+    fn blown_white_stays_neutral() {
+        // A white cloud under white balance [2.4, 1, 1.5], bright enough that green
+        // and blue clip but red doesn't, and a sun where all three clip. They came
+        // out pink: the clipped channels stayed below red.
+        let (w, h) = (24, 24);
+        let wb = [2.4, 1.0, 1.5];
+        let camera = |grey: f32| [0, 1, 2].map(|c| (grey / wb[c]).min(1.0));
+        let mut pixels: Vec<[f32; 3]> = (0..w * h)
+            .map(|i| camera(if i % w < 12 { 2.2 } else { 3.0 }))
+            .collect();
+        reconstruct_highlights(&mut pixels, w, h, wb);
+
+        for (name, p) in [("cloud", pixels[12 * w + 4]), ("sun", pixels[12 * w + 20])] {
+            let balanced = [0, 1, 2].map(|c| p[c] * wb[c]);
+            assert!(balanced[1] >= balanced[0] && balanced[2] >= balanced[0], "{name} {balanced:?}");
+        }
+        let sun = pixels[12 * w + 20];
+        let balanced = [0, 1, 2].map(|c| sun[c] * wb[c]);
+        assert!(balanced.iter().all(|&v| (v - balanced[0]).abs() < 1e-4), "sun {balanced:?}");
+    }
 }

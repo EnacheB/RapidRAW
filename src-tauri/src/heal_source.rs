@@ -12,6 +12,8 @@
 use image::{DynamicImage, GenericImageView, GrayImage};
 use rayon::prelude::*;
 
+use crate::brush_patches::{Image, Rendered};
+
 /// Width in pixels of the band around the painted area that is compared.
 const RING: i32 = 3;
 const ANGLES: usize = 32;
@@ -201,38 +203,36 @@ pub fn find_source_offset(
     Some(d)
 }
 
-/// The pixels of a Heal or Clone spot, computed at render time from the linear float
-/// image, so an edit stores only its recipe (mask and offset) and loses nothing.
+/// A Heal or Clone spot, rendered from the linear float `image` as it is when the
+/// spot applies, so an edit stores only its recipe (mask and offset) and loses
+/// nothing.
 ///
-/// `image` is interleaved RGBA, `width` × `height`. The spot's `mask` is placed at
-/// `origin` and copies from `offset` away. Returns linear RGB for every pixel of the
-/// mask's box, row by row. Clone copies verbatim; Heal also solves Laplace's equation
-/// for the difference along the spot's edge, so the copy takes on the surrounding
-/// brightness and colour.
+/// The spot's `mask` is placed at `origin` and copies from `offset` away. Clone
+/// copies verbatim; Heal also solves Laplace's equation for the difference along the
+/// spot's edge, so the copy takes on the surrounding brightness and colour.
 pub fn render_spot(
-    image: &[f32],
-    width: usize,
-    height: usize,
-    mask: &GrayImage,
+    image: &Image,
+    mask: GrayImage,
     origin: (usize, usize),
     offset: (i32, i32),
     heal: bool,
-) -> Vec<[f32; 3]> {
-    let pixel = |x: i32, y: i32| -> [f32; 3] {
-        let x = x.clamp(0, width as i32 - 1) as usize;
-        let y = y.clamp(0, height as i32 - 1) as usize;
-        let i = (y * width + x) * 4;
-        [image[i], image[i + 1], image[i + 2]]
+) -> Rendered {
+    let pixel = |x: i32, y: i32| {
+        image.pixel(
+            x.clamp(0, image.width as i32 - 1) as usize,
+            y.clamp(0, image.height as i32 - 1) as usize,
+        )
     };
     let (mw, mh) = (mask.width() as usize, mask.height() as usize);
     let (ox, oy) = (origin.0 as i32, origin.1 as i32);
     let source = |x: usize, y: usize| pixel(ox + x as i32 + offset.0, oy + y as i32 + offset.1);
 
     if !heal {
-        return (0..mh)
+        let colors = (0..mh)
             .flat_map(|y| (0..mw).map(move |x| (x, y)))
             .map(|(x, y)| source(x, y))
             .collect();
+        return Rendered { origin, mask, colors };
     }
 
     // The difference image (target minus source) on the mask's box plus a one-pixel
@@ -256,14 +256,15 @@ pub fn render_spot(
     });
     diff.par_iter_mut().for_each(|channel| solve_laplace(channel, &unknown, bw));
 
-    (0..mh)
+    let colors = (0..mh)
         .flat_map(|y| (0..mw).map(move |x| (x, y)))
         .map(|(x, y)| {
             let (s, i) = (source(x, y), (y + 1) * bw + x + 1);
             // Light can't be negative; there is no upper limit.
             std::array::from_fn(|c| (s[c] + diff[c][i]).max(0.0))
         })
-        .collect()
+        .collect();
+    Rendered { origin, mask, colors }
 }
 
 /// Solves Laplace's equation on a `width`-wide grid: fills the `unknown` cells, zero
@@ -468,10 +469,15 @@ mod tests {
         for p in mask.pixels_mut() {
             *p = Luma([255]);
         }
+        let image = Image {
+            pixels: &image,
+            width: w,
+            height: h,
+        };
         for heal in [false, true] {
-            let out = render_spot(&image, w, h, &mask, (10, 10), (30, 0), heal);
+            let out = render_spot(&image, mask.clone(), (10, 10), (30, 0), heal);
             let expected = if heal { 3.0 } else { 2.0 };
-            for c in &out {
+            for c in &out.colors {
                 assert!((c[0] - expected).abs() < 0.05, "heal={heal}: got {c:?}");
             }
         }

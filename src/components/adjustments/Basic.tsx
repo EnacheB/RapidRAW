@@ -1,10 +1,9 @@
 import { motion } from 'framer-motion';
 import clsx from 'clsx';
-import { invoke } from '@tauri-apps/api/core';
 import Slider from '../ui/Slider';
-import { Invokes } from '../ui/AppProperties';
 import { Adjustments, BasicAdjustment } from '../../utils/adjustments';
 import { useEditorStore } from '../../store/useEditorStore';
+import { useCameraProfileName } from '../../hooks/useCameraProfileName';
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -35,21 +34,7 @@ const ToneMapperSwitch = ({
   const [bubbleStyle, setBubbleStyle] = useState({});
   const isInitialAnimation = useRef(true);
   const [isLabelHovered, setIsLabelHovered] = useState(false);
-  const imagePath = useEditorStore((s) => s.selectedImage?.path);
-  const [profileName, setProfileName] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setProfileName(null);
-    if (imagePath) {
-      invoke<string | null>(Invokes.GetCameraProfileName, { path: imagePath })
-        .then((name) => !cancelled && setProfileName(name))
-        .catch(() => {});
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [imagePath]);
+  const profileName = useCameraProfileName(useEditorStore((s) => s.selectedImage?.path));
 
   const toneMapperOptions = useMemo(() => {
     const options = [

@@ -7,6 +7,7 @@ import { useUIStore } from '../store/useUIStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useLibraryStore } from '../store/useLibraryStore';
 import { Adjustments, COPYABLE_ADJUSTMENT_KEYS } from '../utils/adjustments';
+import { bypassStages } from '../utils/pipeline';
 import { Invokes, Panel } from '../components/ui/AppProperties';
 import { debouncedSave } from './useEditorActions';
 import { globalImageCache } from '../utils/ImageLRUCache';
@@ -25,6 +26,7 @@ export function useImageProcessing(
   const selectedImage = useEditorStore((state) => state.selectedImage);
   const adjustments = useEditorStore((state) => state.adjustments);
   const previewOverride = useEditorStore((state) => state.previewOverride);
+  const bypassedStages = useEditorStore((state) => state.bypassedStages);
   const isWaveformVisible = useEditorStore((state) => state.isWaveformVisible);
   const activeWaveformChannel = useEditorStore((state) => state.activeWaveformChannel);
   const displaySize = useEditorStore((state) => state.displaySize);
@@ -127,8 +129,8 @@ export function useImageProcessing(
         lastAnalyticsTimeRef.current = 0;
       }
 
-      const payload = structuredClone(currentAdjustments);
-      const { patchesSentToBackend } = useEditorStore.getState();
+      const { patchesSentToBackend, bypassedStages } = useEditorStore.getState();
+      const payload = bypassStages(structuredClone(currentAdjustments), bypassedStages);
       const newlySentPatches = new Set<string>();
 
       const processSubMasks = (subMasks: any[]) => {
@@ -313,7 +315,9 @@ export function useImageProcessing(
         (adj: Adjustments) => {
           if (!useEditorStore.getState().selectedImage?.isReady) return;
           const jobId = ++uncroppedJobIdRef.current;
-          invoke<string>(Invokes.GenerateUncroppedPreview, { jsAdjustments: adj })
+          const { bypassedStages } = useEditorStore.getState();
+          const payload = bypassStages(structuredClone(adj), bypassedStages);
+          invoke<string>(Invokes.GenerateUncroppedPreview, { jsAdjustments: payload })
             .then((dataUrl) => {
               if (jobId >= latestUncroppedJobIdRef.current) {
                 latestUncroppedJobIdRef.current = jobId;
@@ -490,6 +494,7 @@ export function useImageProcessing(
     activeView,
     adjustments,
     previewOverride,
+    bypassedStages,
     selectedImage?.path,
     selectedImage?.isReady,
     isSliderDragging,

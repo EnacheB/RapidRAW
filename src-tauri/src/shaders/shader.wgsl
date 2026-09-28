@@ -245,6 +245,14 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(higher, lower, c <= cutoff);
 }
 
+// Raw images are stored linear, others sRGB-encoded.
+fn input_to_linear(c: vec3<f32>, is_raw: u32) -> vec3<f32> {
+    if (is_raw == 1u) {
+        return c;
+    }
+    return srgb_to_linear(c);
+}
+
 fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
     let c_clamped = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
     let cutoff = vec3<f32>(0.0031308);
@@ -844,14 +852,16 @@ fn sample_gf_coeffs(abs_coord: vec2<u32>) -> vec4<f32> {
     return sample_gf_tex(gf_coeffs_texture, abs_coord);
 }
 
-fn refined_dark_channel(abs_coord: vec2<u32>, is_raw: u32) -> f32 {
-    var rgb = clamp(textureLoad(input_texture, abs_coord, 0).rgb, vec3<f32>(0.0), vec3<f32>(65504.0));
-    if (is_raw == 0u) {
-        rgb = srgb_to_linear(rgb);
-    }
+// The edge-aware dark channel at this pixel, for positive Dehaze. The guided filter
+// smooths the input's dark channel in log2; its ratio to the input's own dark channel
+// carries over to `color`, the pixel at the point Dehaze acts on, so the sliders
+// before Dehaze (exposure above all) move the estimate with the pixel.
+fn refined_dark_channel(abs_coord: vec2<u32>, is_raw: u32, color: vec3<f32>) -> f32 {
+    let rgb = input_to_linear(clamp(textureLoad(input_texture, abs_coord, 0).rgb, vec3<f32>(0.0), vec3<f32>(65504.0)), is_raw);
     let dark_i = log2(max(min(rgb.r, min(rgb.g, rgb.b)), GF_LUMA_FLOOR));
+    let dark = log2(max(min(color.r, min(color.g, color.b)), GF_LUMA_FLOOR));
     let ab = sample_gf_tex(gf_dehaze_texture, abs_coord).zw;
-    return exp2(ab.x * dark_i + ab.y);
+    return exp2(dark + (ab.x - 1.0) * dark_i + ab.y);
 }
 
 fn shape_detail(d: f32, sigma: f32) -> f32 {
@@ -1076,11 +1086,11 @@ fn apply_centre_tonal_and_color(
     return processed_color;
 }
 
+// `blurred_linear` must be a blur of the image at this same point in the pipeline.
 fn apply_dehaze(
     color: vec3<f32>,
-    blurred_color_input_space: vec3<f32>,
+    blurred_linear: vec3<f32>,
     refined_dark: f32,
-    is_raw: u32,
     amount: f32
 ) -> vec3<f32> {
     if (amount == 0.0) { return color; }
@@ -1101,10 +1111,6 @@ fn apply_dehaze(
         recovered = mix(vec3<f32>(final_luma), recovered, 1.0 + sat_boost);
         return max(recovered, vec3<f32>(0.0));
     } else {
-        var blurred_linear = blurred_color_input_space;
-        if (is_raw == 0u) {
-            blurred_linear = srgb_to_linear(blurred_color_input_space);
-        }
         let regional_dark = min(blurred_linear.r, min(blurred_linear.g, blurred_linear.b));
         let safe_dark = max(regional_dark - 0.02, 0.0);
         let mapped_depth = safe_dark / (safe_dark + 0.2);
@@ -1685,13 +1691,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let original_alpha = textureLoad(input_texture, absolute_coord, 0).a;
 
-    var initial_linear_rgb: vec3<f32>;
     let is_raw = adjustments.global.is_raw_image;
-    if (is_raw == 0u) {
-        initial_linear_rgb = srgb_to_linear(color_from_texture);
-    } else {
-        initial_linear_rgb = color_from_texture;
-    }
+    var initial_linear_rgb = input_to_linear(color_from_texture, is_raw);
 
     var t_exposure = adjustments.global.exposure;
     var t_brightness = adjustments.global.brightness;
@@ -1847,11 +1848,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         processed_rgb += flare_color * t_flare * protection;
     }
 
+    // Dehaze compares the pixel with its neighbourhood, so both come from the same
+    // point: the structure blur (of the input) gets the same exposure first. Glow,
+    // halation and flare only add light and are left out.
     var dehaze_dark = 0.0;
     if (t_dehaze > 0.0) {
-        dehaze_dark = refined_dark_channel(absolute_coord, is_raw);
+        dehaze_dark = refined_dark_channel(absolute_coord, is_raw, processed_rgb);
     }
-    var composite_rgb_linear = apply_dehaze(processed_rgb, structure_blurred, dehaze_dark, is_raw, t_dehaze);
+    let structure_exposed = apply_linear_exposure(input_to_linear(structure_blurred, is_raw), t_exposure);
+    var composite_rgb_linear = apply_dehaze(processed_rgb, structure_exposed, dehaze_dark, t_dehaze);
     composite_rgb_linear = apply_white_balance(composite_rgb_linear, t_wb_log_gains);
     composite_rgb_linear = apply_centre_tonal_and_color(composite_rgb_linear, adjustments.global.centre, absolute_coord_i);
     var tonal_log_detail = 0.0;

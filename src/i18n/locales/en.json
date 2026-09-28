@@ -350,6 +350,7 @@
       "tooltips": {
         "autoAdjust": "Auto Adjust Image",
         "hideFromPanel": "Hide from Panel",
+        "matchCamera": "Match Camera JPEG (sets Exposure and Shadows)",
         "resetAdjustments": "Reset Adjustments",
         "showInPanel": "Show in Panel",
         "toggleAnalytics": "Toggle Analytics Display"

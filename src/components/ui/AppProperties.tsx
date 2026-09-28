@@ -136,6 +136,7 @@ export enum Panel {
   Export = 'export',
   Masks = 'masks',
   Metadata = 'metadata',
+  Pipeline = 'pipeline',
   Presets = 'presets',
   FolderTree = 'folderTree',
   Tethering = 'tethering',
@@ -223,6 +224,10 @@ export interface AppSettings {
   thumbnailAspectRatio?: ThumbnailAspectRatio;
   uiVisibility?: UiVisibility;
   rawHighlightCompression?: number;
+  rawPreprocessingColorNr?: number;
+  rawPreprocessingSharpening?: number;
+  applyPreprocessingToNonRaws?: boolean;
+  useCameraProfiles?: boolean;
   processingBackend?: string;
   linuxGpuOptimization?: boolean;
   exportPresets?: ExportPreset[];

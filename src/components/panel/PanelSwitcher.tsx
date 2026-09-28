@@ -13,6 +13,7 @@ import {
   FileInput,
   Camera,
   Folder as FolderIcon,
+  Workflow,
   type LucideIcon,
 } from 'lucide-react';
 import { Panel, PanelRegion } from '../ui/AppProperties';
@@ -25,6 +26,7 @@ export const PANEL_ICONS: Record<Panel, LucideIcon> = {
   [Panel.Masks]: Layers,
   [Panel.Ai]: Paintbrush,
   [Panel.Presets]: SwatchBook,
+  [Panel.Pipeline]: Workflow,
   [Panel.Export]: FileInput,
   [Panel.FolderTree]: FolderIcon,
   [Panel.Tethering]: Camera,
@@ -37,6 +39,7 @@ const PANEL_TITLES: Record<Panel, string> = {
   [Panel.Masks]: 'editor.switcher.tooltips.masks',
   [Panel.Ai]: 'editor.switcher.tooltips.inpaint',
   [Panel.Presets]: 'editor.switcher.tooltips.presets',
+  [Panel.Pipeline]: 'editor.switcher.tooltips.pipeline',
   [Panel.Export]: 'editor.switcher.tooltips.export',
   [Panel.FolderTree]: 'library.folders.sourcesTitle',
   [Panel.Tethering]: 'editor.switcher.tooltips.tethering',

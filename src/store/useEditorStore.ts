@@ -26,6 +26,8 @@ interface EditorState {
   selectedImage: SelectedImage | null;
   adjustments: Adjustments;
   previewOverride: Adjustments | null;
+  // Pipeline stages switched off in the preview only (see utils/pipeline.ts).
+  bypassedStages: string[];
 
   // History State
   history: Adjustments[];
@@ -94,6 +96,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   selectedImage: null,
   adjustments: INITIAL_ADJUSTMENTS,
   previewOverride: null,
+  bypassedStages: [],
   history: [INITIAL_ADJUSTMENTS],
   historyIndex: 0,
 

@@ -1495,7 +1495,12 @@ pub fn generate_thumbnail_data(
     let settings = load_settings(app_handle.clone()).unwrap_or_default();
     let always_decode_raw = settings.always_decode_raw_thumbnails.unwrap_or(false);
 
-    if is_raw && adjustments.is_null() && preloaded_image.is_none() && !always_decode_raw {
+    // XMP sync stores the rating inside adjustments; a rating alone is not an edit.
+    let has_no_edits = adjustments
+        .as_object()
+        .is_none_or(|o| o.keys().all(|k| k == "rating"));
+
+    if is_raw && has_no_edits && preloaded_image.is_none() && !always_decode_raw {
         let target_res = settings.medium_thumbnail_resolution.unwrap_or(1280);
         if let Some(preview) = try_load_embedded_raw_preview(&source_path, target_res) {
             return Ok(preview);

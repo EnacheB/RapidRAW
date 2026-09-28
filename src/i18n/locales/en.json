@@ -828,7 +828,7 @@
         "count": "{{count}} active",
         "decodeImage": "sRGB to linear",
         "demosaic": "PPG (Bayer) or full-res (X-Trans)",
-        "highlightRecovery": "Rebuilds clipped channels",
+        "highlightRecovery": "Inpaint opposed: clipped channels rebuilt from the other two, in camera RGB",
         "embeddedLens": "Camera's own distortion data, when the file has it",
         "noProfile": "Generic matrix, no profile for this camera",
         "profilesOff": "Generic matrix, Camera Profiles is off",

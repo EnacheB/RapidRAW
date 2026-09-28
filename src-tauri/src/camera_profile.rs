@@ -763,6 +763,38 @@ impl Calibration {
         }
         mat_vec_f32(&self.prophoto_to_working, c).map(|x| x.max(0.0))
     }
+
+    /// rawler's own colour, for RAWs without a profile: what its Calibrate step
+    /// does (white balance by `wb_coeffs`, then its D65 or only matrix with rows
+    /// normalised so grey stays grey), done here so decode can work on camera RGB
+    /// first. None for four-colour sensors, which keep rawler's Calibrate.
+    pub fn from_raw_matrix(raw: &RawImage) -> Option<Calibration> {
+        use rawler::imgop::xyz::{Illuminant, SRGB_TO_XYZ_D65};
+        let (_, m) = raw
+            .color_matrix
+            .iter()
+            .find(|(illuminant, _)| **illuminant == Illuminant::D65)
+            .or_else(|| raw.color_matrix.iter().next())?;
+        if m.len() != 9 {
+            return None;
+        }
+        let xyz_to_camera: Mat3 = std::array::from_fn(|i| std::array::from_fn(|j| m[i * 3 + j] as f64));
+        let rec709_to_xyz = SRGB_TO_XYZ_D65.map(|row| row.map(f64::from));
+        let rec709_to_camera =
+            mul(&xyz_to_camera, &rec709_to_xyz).map(|row| row.map(|x| x / row.iter().sum::<f64>()));
+        let wb = if raw.wb_coeffs[0].is_nan() {
+            [1.0; 3]
+        } else {
+            std::array::from_fn(|c| raw.wb_coeffs[c] as f64)
+        };
+        let camera_to_working = mul(&invert(&rec709_to_camera)?, &diag(wb));
+        let prophoto_to_working = prophoto_to_working();
+        Some(Calibration {
+            camera_to_prophoto: to_f32(&mul(&invert(&prophoto_to_working)?, &camera_to_working)),
+            hue_sat_map: None,
+            prophoto_to_working: to_f32(&prophoto_to_working),
+        })
+    }
 }
 
 impl CameraProfile {

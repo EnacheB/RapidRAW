@@ -33,7 +33,8 @@ use rawler::rawimage::{RawImage, RawPhotometricInterpretation};
 use rawler::rawsource::RawSource;
 
 use crate::app_settings::AppSettings;
-use crate::image_processing::AllAdjustments;
+use crate::image_processing::{AllAdjustments, GpuMat3};
+use crate::white_balance::WhiteBalance;
 
 /// The `toneMapper` adjustment value that selects profile rendering.
 pub const TONE_MAPPER_ID: &str = "profile";
@@ -385,7 +386,7 @@ fn hsv_to_rgb([mut h, s, v]: [f32; 3]) -> [f32; 3] {
 }
 
 /// A parsed .dcp file.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CameraProfile {
     /// ProfileName, else the file name.
     pub name: String,
@@ -743,11 +744,125 @@ fn prophoto_to_working() -> Mat3 {
 }
 
 // ---------------------------------------------------------------------------
-// Colour, applied when the RAW is decoded
+// Colour, applied when the RAW is decoded and by the white balance stage
 
-/// A profile's colour for one shot: camera RGB to the working space, in place of
+/// A RAW's colour, from its metadata: the as-shot white balance, rawler's
+/// generic matrix and the camera's profile. Decode and the shader's white
+/// balance both take their matrices from here, so they agree.
+pub struct Shot {
+    /// Camera-channel multipliers that white-balance the shot as shot (rawler's
+    /// `wb_coeffs`).
+    wb: [f64; 3],
+    /// rawler's D65 (or only) matrix, inverted: white-balanced camera RGB to
+    /// working Rec.709, with grey staying grey.
+    rawler_matrix: Mat3,
+    /// rawler's XYZ to camera matrices for illuminants A and D65 (the same one
+    /// twice when it has only one), blended by temperature for other whites.
+    xyz_to_camera: [Mat3; 2],
+    profile: Option<Arc<CameraProfile>>,
+}
+
+impl Shot {
+    /// None for four-colour sensors, which keep rawler's Calibrate step.
+    pub fn from_raw(raw: &RawImage) -> Option<Shot> {
+        use rawler::imgop::xyz::{Illuminant, SRGB_TO_XYZ_D65};
+        let (_, m) = raw
+            .color_matrix
+            .iter()
+            .find(|(illuminant, _)| **illuminant == Illuminant::D65)
+            .or_else(|| raw.color_matrix.iter().next())?;
+        if m.len() != 9 {
+            return None;
+        }
+        let to_mat3 = |m: &[f32]| -> Mat3 { std::array::from_fn(|i| std::array::from_fn(|j| m[i * 3 + j] as f64)) };
+        let xyz_to_camera = to_mat3(m);
+        let xyz_to_camera_a = raw
+            .color_matrix
+            .get(&Illuminant::A)
+            .filter(|m| m.len() == 9)
+            .map_or(xyz_to_camera, |m| to_mat3(m));
+        let rec709_to_xyz = SRGB_TO_XYZ_D65.map(|row| row.map(f64::from));
+        let rec709_to_camera =
+            mul(&xyz_to_camera, &rec709_to_xyz).map(|row| row.map(|x| x / row.iter().sum::<f64>()));
+        let wb = std::array::from_fn(|c| {
+            let w = raw.wb_coeffs[c] as f64;
+            if w.is_finite() && w > 0.0 { w } else { 1.0 }
+        });
+        Some(Shot {
+            wb,
+            rawler_matrix: invert(&rec709_to_camera)?,
+            xyz_to_camera: [xyz_to_camera_a, xyz_to_camera],
+            profile: for_raw(raw),
+        })
+    }
+
+    /// White-balanced camera RGB to ProPhoto for the shot balanced with camera
+    /// multipliers `wb`, plus the HueSatMap for that white: the profile's when
+    /// `use_profile` and there is one, else rawler's matrix.
+    fn balanced_to_prophoto(&self, wb: [f64; 3], use_profile: bool) -> (Mat3, Option<HsvTable>) {
+        if use_profile && let Some(colour) = self.profile.as_ref().and_then(|p| p.colour(wb)) {
+            return colour;
+        }
+        let working_to_prophoto = invert(&prophoto_to_working()).unwrap();
+        (mul(&working_to_prophoto, &self.rawler_matrix), None)
+    }
+
+    /// The colour decode gives the shot, as shot.
+    pub fn calibration(&self, use_profile: bool) -> Calibration {
+        let (balanced_to_prophoto, hue_sat_map) = self.balanced_to_prophoto(self.wb, use_profile);
+        Calibration {
+            wb: self.wb.map(|w| w as f32),
+            camera_to_prophoto: to_f32(&mul(&balanced_to_prophoto, &diag(self.wb))),
+            hue_sat_map,
+            prophoto_to_working: to_f32(&prophoto_to_working()),
+        }
+    }
+
+    /// The camera's response to light of `white`: the profile's colour matrices
+    /// when `use_profile` and there is one, else rawler's, blended for its
+    /// temperature as the DNG SDK does.
+    fn camera_neutral(&self, white: WhiteBalance, use_profile: bool) -> [f64; 3] {
+        let xy = white.to_xy();
+        if use_profile && let Some(profile) = &self.profile {
+            return mul_vec(&profile.xyz_to_camera(xy), xy_to_xyz(xy));
+        }
+        const MIRED_A: f64 = 1.0e6 / 2856.0;
+        const MIRED_D65: f64 = 1.0e6 / 6504.0;
+        let a = ((1.0e6 / white.temperature - MIRED_D65) / (MIRED_A - MIRED_D65)).clamp(0.0, 1.0);
+        let [m_a, m_d65] = &self.xyz_to_camera;
+        let m = std::array::from_fn(|i| std::array::from_fn(|j| a * m_a[i][j] + (1.0 - a) * m_d65[i][j]));
+        mul_vec(&m, xy_to_xyz(xy))
+    }
+
+    /// The shader's `wb_camera` for the global white: working space to camera RGB
+    /// balanced as shot, the camera channels scaled so light of `target` turns
+    /// grey instead of light of `as_shot` (green kept), and back through the
+    /// profile's matrix blended for the new white, as Lightroom and RawTherapee
+    /// re-blend it. The HueSatMap stays the as-shot one that decode applied. None
+    /// (identity) at the as-shot white.
+    fn white_balance(&self, as_shot: WhiteBalance, target: WhiteBalance, use_profile: bool) -> Option<Mat3> {
+        if target == as_shot {
+            return None;
+        }
+        let shot_light = self.camera_neutral(as_shot, use_profile);
+        let new_light = self.camera_neutral(target, use_profile);
+        // A tint far off the locus can ask for a light the camera can't see in some
+        // channel; keep every gain finite.
+        let max = new_light.into_iter().fold(f64::MIN, f64::max);
+        let gains: [f64; 3] = std::array::from_fn(|c| shot_light[c] / new_light[c].max(max * 1e-3));
+        let gains = gains.map(|g| g / gains[1]);
+        let to_working = |wb| mul(&prophoto_to_working(), &self.balanced_to_prophoto(wb, use_profile).0);
+        let to_camera = invert(&to_working(self.wb))?;
+        let new_wb = std::array::from_fn(|c| self.wb[c] * gains[c]);
+        Some(mul(&to_working(new_wb), &mul(&diag(gains), &to_camera)))
+    }
+}
+
+/// Decode's colour for one shot: camera RGB to the working space, in place of
 /// rawler's Calibrate step.
 pub struct Calibration {
+    /// Camera-channel multipliers that white-balance the shot as shot.
+    pub wb: [f32; 3],
     camera_to_prophoto: [[f32; 3]; 3],
     hue_sat_map: Option<HsvTable>,
     prophoto_to_working: [[f32; 3]; 3],
@@ -763,71 +878,28 @@ impl Calibration {
         }
         mat_vec_f32(&self.prophoto_to_working, c).map(|x| x.max(0.0))
     }
-
-    /// rawler's own colour, for RAWs without a profile: what its Calibrate step
-    /// does (white balance by `wb_coeffs`, then its D65 or only matrix with rows
-    /// normalised so grey stays grey), done here so decode can work on camera RGB
-    /// first. None for four-colour sensors, which keep rawler's Calibrate.
-    pub fn from_raw_matrix(raw: &RawImage) -> Option<Calibration> {
-        use rawler::imgop::xyz::{Illuminant, SRGB_TO_XYZ_D65};
-        let (_, m) = raw
-            .color_matrix
-            .iter()
-            .find(|(illuminant, _)| **illuminant == Illuminant::D65)
-            .or_else(|| raw.color_matrix.iter().next())?;
-        if m.len() != 9 {
-            return None;
-        }
-        let xyz_to_camera: Mat3 = std::array::from_fn(|i| std::array::from_fn(|j| m[i * 3 + j] as f64));
-        let rec709_to_xyz = SRGB_TO_XYZ_D65.map(|row| row.map(f64::from));
-        let rec709_to_camera =
-            mul(&xyz_to_camera, &rec709_to_xyz).map(|row| row.map(|x| x / row.iter().sum::<f64>()));
-        let wb = if raw.wb_coeffs[0].is_nan() {
-            [1.0; 3]
-        } else {
-            std::array::from_fn(|c| raw.wb_coeffs[c] as f64)
-        };
-        let camera_to_working = mul(&invert(&rec709_to_camera)?, &diag(wb));
-        let prophoto_to_working = prophoto_to_working();
-        Some(Calibration {
-            camera_to_prophoto: to_f32(&mul(&invert(&prophoto_to_working)?, &camera_to_working)),
-            hue_sat_map: None,
-            prophoto_to_working: to_f32(&prophoto_to_working),
-        })
-    }
 }
 
 impl CameraProfile {
-    /// The colour of a shot that rawler white-balances with the camera-channel
-    /// multipliers `wb`.
-    pub fn calibration(&self, wb: [f32; 3]) -> Option<Calibration> {
-        let wb = wb.map(|w| {
-            if w.is_finite() && w > 0.0 {
-                w as f64
-            } else {
-                1.0
-            }
-        });
+    /// White-balanced camera RGB to ProPhoto for a shot that rawler balances
+    /// with camera multipliers `wb`, and the HueSatMap blended for that white.
+    fn colour(&self, wb: [f64; 3]) -> Option<(Mat3, Option<HsvTable>)> {
         let neutral = wb.map(|w| 1.0 / w);
         let max = neutral.into_iter().fold(f64::MIN, f64::max);
         let (camera_to_xyz, w) = self.camera_to_xyz(neutral.map(|n| n / max))?;
         // The DNG SDK scales white to clip with its brightest camera channel, rawler
         // just multiplies by `wb`. Keep rawler's scale: a profile changes colour, not
         // exposure.
-        let camera_to_prophoto = scale(
-            &mul(&invert(&PROPHOTO_TO_XYZ_D50)?, &camera_to_xyz),
-            1.0 / max,
+        let balanced_to_prophoto = mul(
+            &scale(&mul(&invert(&PROPHOTO_TO_XYZ_D50)?, &camera_to_xyz), 1.0 / max),
+            &diag(neutral),
         );
         let hue_sat_map = match &self.hue_sat_map {
             [Some(a), Some(b)] => Some(HsvTable::blend(a, b, w)),
             [Some(a), None] | [None, Some(a)] => Some(a.clone()),
             [None, None] => None,
         };
-        Some(Calibration {
-            camera_to_prophoto: to_f32(&camera_to_prophoto),
-            hue_sat_map,
-            prophoto_to_working: self.prophoto_to_working,
-        })
+        Some((balanced_to_prophoto, hue_sat_map))
     }
 }
 
@@ -937,7 +1009,7 @@ fn rgb_tone(curve: &[f32], c: [f32; 3]) -> [f32; 3] {
 static USER_PROFILE_DIR: OnceLock<PathBuf> = OnceLock::new();
 static PROFILE_CACHE: LazyLock<Mutex<HashMap<PathBuf, Arc<CameraProfile>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-static IMAGE_CACHE: LazyLock<Mutex<HashMap<PathBuf, Option<Arc<CameraProfile>>>>> =
+static SHOT_CACHE: LazyLock<Mutex<HashMap<PathBuf, Option<Arc<Shot>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// The app's own profile folder (`<app data>/camera_profiles`), searched first.
@@ -1019,7 +1091,7 @@ pub fn for_raw(raw: &RawImage) -> Option<Arc<CameraProfile>> {
     ))?)
 }
 
-fn resolve(source: &Path) -> Result<Option<Arc<CameraProfile>>, String> {
+fn resolve(source: &Path) -> Result<Option<Arc<Shot>>, String> {
     if !crate::formats::is_raw_file(source) {
         return Ok(None);
     }
@@ -1028,7 +1100,25 @@ fn resolve(source: &Path) -> Result<Option<Arc<CameraProfile>>, String> {
     let raw = decoder
         .raw_image(&raw_source, &RawDecodeParams::default(), true)
         .map_err(|e| e.to_string())?;
-    Ok(for_raw(&raw))
+    Ok(Shot::from_raw(&raw).map(Arc::new))
+}
+
+/// The colour of a RAW (or a virtual copy of one), read from its metadata.
+fn shot(path: &str) -> Option<Arc<Shot>> {
+    let (source, _) = crate::file_management::parse_virtual_path(path);
+    if let Some(hit) = SHOT_CACHE.lock().unwrap().get(&source) {
+        return hit.clone();
+    }
+    let shot = resolve(&source).unwrap_or_else(|e| {
+        log::warn!("Reading the colour of '{}' failed: {}", source.display(), e);
+        None
+    });
+    let mut cache = SHOT_CACHE.lock().unwrap();
+    if cache.len() > 512 {
+        cache.clear();
+    }
+    cache.insert(source, shot.clone());
+    shot
 }
 
 /// The profile a RAW (or a virtual copy of one) is decoded with under `settings`.
@@ -1036,37 +1126,40 @@ pub fn for_image(path: &str, settings: &AppSettings) -> Option<Arc<CameraProfile
     if !settings.use_camera_profiles.unwrap_or(false) {
         return None;
     }
-    let (source, _) = crate::file_management::parse_virtual_path(path);
-    if let Some(hit) = IMAGE_CACHE.lock().unwrap().get(&source) {
-        return hit.clone();
-    }
-    let profile = resolve(&source).unwrap_or_else(|e| {
-        log::warn!(
-            "Camera profile lookup failed for '{}': {}",
-            source.display(),
-            e
-        );
-        None
-    });
-    let mut cache = IMAGE_CACHE.lock().unwrap();
-    if cache.len() > 512 {
-        cache.clear();
-    }
-    cache.insert(source, profile.clone());
-    profile
+    shot(path)?.profile.clone()
 }
 
-/// The profile a render of `path` needs: only the "Profile" tone mapper uses one.
-pub fn for_render(
+/// Everything a render of the image at `path` with the editor's adjustments `js`
+/// needs: the shader's adjustments, including the camera's white balance matrices,
+/// and the profile if the "Profile" tone mapper is selected. Every render builds
+/// its adjustments here, so none can miss the camera's colour.
+pub fn render_adjustments(
+    js: &serde_json::Value,
     path: &str,
-    adjustments: &AllAdjustments,
+    is_raw: bool,
     settings: &AppSettings,
-) -> Option<Arc<CameraProfile>> {
-    let global = &adjustments.global;
-    if global.tonemapper_mode != TONE_MAPPER_MODE || global.is_raw_image != 1 {
-        return None;
+) -> (AllAdjustments, Option<Arc<CameraProfile>>) {
+    let tm_override = crate::image_processing::resolve_tonemapper_override(settings, is_raw);
+    let as_shot = crate::white_balance::as_shot_white_balance(path);
+    let mut adjustments =
+        crate::image_processing::get_all_adjustments_from_json(js, is_raw, as_shot, tm_override);
+    let use_profile = settings.use_camera_profiles.unwrap_or(false);
+    let global = &mut adjustments.global;
+    let shot = is_raw.then(|| shot(path)).flatten();
+    if let Some(shot) = &shot {
+        // A RAW's global white is balanced in camera RGB; the LMS gains are left to masks.
+        let target = crate::image_processing::target_white_balance(js, as_shot);
+        if let Some(m) = shot.white_balance(as_shot, target, use_profile) {
+            global.wb_camera = GpuMat3::from_rows(to_f32(&m));
+        }
+        global.wb_log_gain_l = 0.0;
+        global.wb_log_gain_m = 0.0;
+        global.wb_log_gain_s = 0.0;
     }
-    for_image(path, settings)
+    let profile = shot
+        .and_then(|shot| shot.profile.clone())
+        .filter(|_| use_profile && global.tonemapper_mode == TONE_MAPPER_MODE);
+    (adjustments, profile)
 }
 
 /// Name of the camera profile this image is decoded with, if any. The editor
@@ -1121,6 +1214,16 @@ mod tests {
     fn wb_under(profile: &CameraProfile, white: (f64, f64)) -> [f32; 3] {
         let neutral = mul_vec(&profile.xyz_to_camera(white), xy_to_xyz(white));
         neutral.map(|n| (neutral[1] / n) as f32)
+    }
+
+    /// A shot with `profile`'s camera, white balanced by `wb`.
+    fn shot(profile: &CameraProfile, wb: [f32; 3]) -> Shot {
+        Shot {
+            wb: wb.map(f64::from),
+            rawler_matrix: diag([1.0; 3]),
+            xyz_to_camera: [diag([1.0; 3]); 2],
+            profile: Some(Arc::new(profile.clone())),
+        }
     }
 
     #[test]
@@ -1202,7 +1305,7 @@ mod tests {
         for white in [(0.44757, 0.40745), (0.3457, 0.3585), (0.31271, 0.32902)] {
             for wb_scale in [1.0, 0.5] {
                 let wb = wb_under(&profile, white).map(|w| w * wb_scale);
-                let calibration = profile.calibration(wb).unwrap();
+                let calibration = shot(&profile, wb).calibration(true);
                 let grey = calibration.apply(wb.map(|w| 0.18 / w));
                 for c in grey {
                     assert!((c - 0.18).abs() < 0.002, "{white:?} x{wb_scale}: {grey:?}");
@@ -1213,6 +1316,31 @@ mod tests {
                     "{white:?}: {out:?}"
                 );
             }
+        }
+    }
+
+    /// The white balance stage: at the as-shot white it changes nothing, and a
+    /// grey card lit by the target white comes out grey, with the profile
+    /// re-blended for the new white.
+    #[test]
+    fn target_white_turns_grey() {
+        let Some(profile) = rt_profile() else { return };
+        let shot_xy = (0.31271, 0.32902);
+        let shot = shot(&profile, wb_under(&profile, shot_xy));
+        let as_shot = WhiteBalance::from_xy(shot_xy.0, shot_xy.1);
+        assert!(shot.white_balance(as_shot, as_shot, true).is_none());
+        let to_working = |wb| mul(&prophoto_to_working(), &shot.balanced_to_prophoto(wb, true).0);
+        for (temperature, tint) in [(3000.0, 0.0), (4500.0, 10.0), (9000.0, -15.0)] {
+            let target = WhiteBalance { temperature, tint };
+            let m = shot.white_balance(as_shot, target, true).unwrap();
+            // The card as decode delivers it, balanced as shot.
+            let light = shot.camera_neutral(target, true);
+            let decoded = mul_vec(&to_working(shot.wb), std::array::from_fn(|c| light[c] * shot.wb[c]));
+            let out = mul_vec(&m, decoded);
+            assert!(
+                (out[0] - out[1]).abs() < 1e-2 * out[1] && (out[2] - out[1]).abs() < 1e-2 * out[1],
+                "{temperature}/{tint}: {out:?}"
+            );
         }
     }
 

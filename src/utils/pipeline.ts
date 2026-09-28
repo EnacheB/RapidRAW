@@ -117,6 +117,7 @@ export const PIPELINE_STAGES: PipelineStage[] = [
     panel: Panel.Adjustments,
   },
   { id: 'sharpening', phase: 'render', keys: ['sharpness'], section: 'details', panel: Panel.Adjustments },
+  { id: 'whiteBalance', phase: 'render', keys: ['temperature', 'tint'], section: 'color', panel: Panel.Adjustments },
   {
     id: 'localContrast',
     phase: 'render',
@@ -129,7 +130,6 @@ export const PIPELINE_STAGES: PipelineStage[] = [
   { id: 'halation', phase: 'render', keys: ['halationAmount'], section: 'effects', panel: Panel.Adjustments },
   { id: 'flare', phase: 'render', keys: ['flareAmount'], section: 'effects', panel: Panel.Adjustments },
   { id: 'dehaze', phase: 'render', keys: ['dehaze'], section: 'details', panel: Panel.Adjustments },
-  { id: 'whiteBalance', phase: 'render', keys: ['temperature', 'tint'], section: 'color', panel: Panel.Adjustments },
   {
     id: 'tone',
     phase: 'render',

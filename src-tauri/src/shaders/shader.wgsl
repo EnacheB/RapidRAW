@@ -83,6 +83,7 @@ struct GlobalAdjustments {
     agx_rendering_to_pipe_matrix: mat3x3<f32>,
     wb_rgb_to_lms_matrix: mat3x3<f32>,
     wb_lms_to_rgb_matrix: mat3x3<f32>,
+    wb_camera: mat3x3<f32>,
 
     _pad_cg1: f32,
     _pad_cg2: f32,
@@ -679,7 +680,14 @@ fn apply_color_calibration(color: vec3<f32>, cal: ColorCalibrationSettings) -> v
     return c;
 }
 
-fn apply_white_balance(color: vec3<f32>, log_gains: vec3<f32>) -> vec3<f32> {
+// White balance, the camera colour stage, before every scene edit. A RAW's global
+// white is balanced in camera RGB, as a camera does it: `wb_camera` (set by
+// `camera_profile.rs`, identity otherwise) scales the camera channels and goes back
+// through the camera matrix for the new white. `log_gains` adapt the rest in LMS:
+// the global white of other images, and every mask's Temperature and Tint, which
+// stack by adding log gains and so never reach zero or flip a colour.
+fn apply_white_balance(color_in: vec3<f32>, log_gains: vec3<f32>) -> vec3<f32> {
+    let color = adjustments.global.wb_camera * color_in;
     if (all(log_gains == vec3<f32>(0.0))) {
         return color;
     }
@@ -1547,7 +1555,7 @@ fn sample_lut_tetrahedral(uv: vec3<f32>) -> vec3<f32> {
 
 fn apply_glow_bloom(
     color: vec3<f32>,
-    blurred_color_input_space: vec3<f32>,
+    blurred: vec3<f32>,
     amount: f32,
     is_raw: u32,
     exp: f32, bright: f32, con: f32, wh: f32
@@ -1556,14 +1564,7 @@ fn apply_glow_bloom(
         return color;
     }
 
-    var blurred_linear: vec3<f32>;
-    if (is_raw == 1u) {
-        blurred_linear = blurred_color_input_space;
-    } else {
-        blurred_linear = srgb_to_linear(blurred_color_input_space);
-    }
-
-    blurred_linear = apply_linear_exposure(blurred_linear, exp);
+    var blurred_linear = apply_linear_exposure(blurred, exp);
     blurred_linear = apply_filmic_exposure(blurred_linear, bright);
     blurred_linear = apply_tonal_adjustments(blurred_linear, 0.0, 0.0, is_raw, 0.0, 0.0, wh, 0.0);
 
@@ -1617,21 +1618,14 @@ fn apply_glow_bloom(
 
 fn apply_halation(
     color: vec3<f32>,
-    blurred_color_input_space: vec3<f32>,
+    blurred: vec3<f32>,
     amount: f32,
     is_raw: u32,
     exp: f32, bright: f32, con: f32, wh: f32
 ) -> vec3<f32> {
     if (amount <= 0.0) { return color; }
 
-    var blurred_linear: vec3<f32>;
-    if (is_raw == 1u) {
-        blurred_linear = blurred_color_input_space;
-    } else {
-        blurred_linear = srgb_to_linear(blurred_color_input_space);
-    }
-
-    blurred_linear = apply_linear_exposure(blurred_linear, exp);
+    var blurred_linear = apply_linear_exposure(blurred, exp);
     blurred_linear = apply_filmic_exposure(blurred_linear, bright);
     blurred_linear = apply_tonal_adjustments(blurred_linear, 0.0, 0.0, is_raw, 0.0, 0.0, wh, 0.0);
 
@@ -1779,19 +1773,24 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let sharpness_blurred = textureLoad(sharpness_blur_texture, absolute_coord, 0).rgb;
     let tonal_blurred = textureLoad(tonal_blur_texture, absolute_coord, 0).rgb;
-    let clarity_blurred = textureLoad(clarity_blur_texture, absolute_coord, 0).rgb;
-    let structure_blurred = textureLoad(structure_blur_texture, absolute_coord, 0).rgb;
-
-    var locally_contrasted_rgb = initial_linear_rgb;
-
-    locally_contrasted_rgb = apply_sharpen(
-        locally_contrasted_rgb,
+    let sharpened_rgb = apply_sharpen(
+        initial_linear_rgb,
         sharpness_blurred, tonal_blurred,
         absolute_coord_i, t_sharpness, t_sharp_thresh, is_raw
     );
 
+    // Camera colour: white balance comes before every scene edit. The blurs that
+    // later stages add or compare with get it too.
+    var locally_contrasted_rgb = apply_white_balance(sharpened_rgb, t_wb_log_gains);
+    let clarity_blurred = apply_white_balance(
+        input_to_linear(textureLoad(clarity_blur_texture, absolute_coord, 0).rgb, is_raw), t_wb_log_gains);
+    let structure_blurred = apply_white_balance(
+        input_to_linear(textureLoad(structure_blur_texture, absolute_coord, 0).rgb, is_raw), t_wb_log_gains);
+
+    // The guided filter's coefficients come from the input, so its detail is measured
+    // on the pixel before white balance, at the same point.
     let gf = sample_gf_coeffs(absolute_coord);
-    let gf_luma = max(get_luma(max(locally_contrasted_rgb, vec3<f32>(0.0))), GF_LUMA_FLOOR);
+    let gf_luma = max(get_luma(max(sharpened_rgb, vec3<f32>(0.0))), GF_LUMA_FLOOR);
     let gf_i = log2(gf_luma);
     let detail_clarity = gf_i - (gf.x * gf_i + gf.y);
     var detail_structure = 0.0;
@@ -1845,19 +1844,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             perceptual_luma = 1.0 + pow(linear_luma - 1.0, 1.0 / 2.2);
         }
         let protection = 1.0 - smoothstep(0.7, 1.8, perceptual_luma);
-        processed_rgb += flare_color * t_flare * protection;
+        processed_rgb += apply_white_balance(flare_color, t_wb_log_gains) * t_flare * protection;
     }
 
     // Dehaze compares the pixel with its neighbourhood, so both come from the same
-    // point: the structure blur (of the input) gets the same exposure first. Glow,
-    // halation and flare only add light and are left out.
+    // point: the structure blur (of the input) gets the same white balance and
+    // exposure first. Glow, halation and flare only add light and are left out.
     var dehaze_dark = 0.0;
     if (t_dehaze > 0.0) {
         dehaze_dark = refined_dark_channel(absolute_coord, is_raw, processed_rgb);
     }
-    let structure_exposed = apply_linear_exposure(input_to_linear(structure_blurred, is_raw), t_exposure);
+    let structure_exposed = apply_linear_exposure(structure_blurred, t_exposure);
     var composite_rgb_linear = apply_dehaze(processed_rgb, structure_exposed, dehaze_dark, t_dehaze);
-    composite_rgb_linear = apply_white_balance(composite_rgb_linear, t_wb_log_gains);
     composite_rgb_linear = apply_centre_tonal_and_color(composite_rgb_linear, adjustments.global.centre, absolute_coord_i);
     var tonal_log_detail = 0.0;
     var tonal_mid_detail = 0.0;

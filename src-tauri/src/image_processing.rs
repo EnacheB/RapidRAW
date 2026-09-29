@@ -2702,8 +2702,9 @@ pub fn remove_raw_artifacts_and_enhance(
 
     if color_nr_inv_sigma > 0.0 {
         let base_inv_sigma = color_nr_inv_sigma;
-        const OFFSETS: [isize; 3] = [-5, -1, 3];
-        const OFFSET_SQUARES: [f32; 3] = [25.0, 1.0, 9.0];
+        // Centred, so colour doesn't shift towards the top left.
+        const OFFSETS: [isize; 3] = [-4, 0, 4];
+        const OFFSET_SQUARES: [f32; 3] = [16.0, 0.0, 16.0];
 
         buffer
             .par_chunks_mut(w * 3)
@@ -2756,20 +2757,10 @@ pub fn remove_raw_artifacts_and_enhance(
                         }
                     }
 
+                    // The plain weighted mean: capping it at the pixel's own chroma
+                    // (as this once did) turns noise into a steady loss of saturation.
                     let (out_cb, out_cr) = if w_sum > 1e-4 {
-                        let inv_w_sum = 1.0 / w_sum;
-                        let filtered_cb = cb_sum * inv_w_sum;
-                        let filtered_cr = cr_sum * inv_w_sum;
-
-                        let orig_mag_sq = ccb * ccb + ccr * ccr;
-                        let filt_mag_sq = filtered_cb * filtered_cb + filtered_cr * filtered_cr;
-
-                        if filt_mag_sq > orig_mag_sq && orig_mag_sq > 1e-12 {
-                            let scale = (orig_mag_sq / filt_mag_sq).sqrt();
-                            (filtered_cb * scale, filtered_cr * scale)
-                        } else {
-                            (filtered_cb, filtered_cr)
-                        }
+                        (cb_sum / w_sum, cr_sum / w_sum)
                     } else {
                         (ccb, ccr)
                     };

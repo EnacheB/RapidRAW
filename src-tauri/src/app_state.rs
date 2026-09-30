@@ -141,6 +141,8 @@ pub struct PreviewJob {
 pub struct AnalyticsJob {
     pub path: String,
     pub image: Arc<DynamicImage>,
+    /// Counts for the Curves graph's histogram, from the shader.
+    pub curve_histogram: Vec<u32>,
     pub compute_waveform: bool,
     pub active_waveform_channel: Option<String>,
 }

@@ -2880,6 +2880,38 @@ pub struct HistogramData {
     green: Vec<f32>,
     blue: Vec<f32>,
     luma: Vec<f32>,
+    /// What the curves act on, on the Curves graph's axis: scene light before the
+    /// rendering, so it differs from the finished picture's histogram above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    curve: Option<Box<HistogramData>>,
+}
+
+impl HistogramData {
+    /// Smooths and scales bin counts for drawing.
+    fn from_counts(red: &[u32], green: &[u32], blue: &[u32], luma: &[u32]) -> Self {
+        let finish = |counts: &[u32]| {
+            let mut bins: Vec<f32> = counts.iter().map(|&c| c as f32).collect();
+            apply_gaussian_smoothing(&mut bins, 2.0);
+            normalize_histogram_range(&mut bins, 0.99);
+            bins
+        };
+        Self {
+            red: finish(red),
+            green: finish(green),
+            blue: finish(blue),
+            luma: finish(luma),
+            curve: None,
+        }
+    }
+
+    /// Adds the shader's counts for the Curves graph: luma, red, green and blue, 256 each.
+    pub fn with_curve_histogram(self, counts: &[u32]) -> Self {
+        let [luma, red, green, blue] = [0, 1, 2, 3].map(|i| &counts[i * 256..(i + 1) * 256]);
+        Self {
+            curve: Some(Box::new(Self::from_counts(red, green, blue, luma))),
+            ..self
+        }
+    }
 }
 
 pub fn calculate_histogram_from_image(image: &DynamicImage) -> Result<HistogramData, String> {
@@ -2940,28 +2972,7 @@ pub fn calculate_histogram_from_image(image: &DynamicImage) -> Result<HistogramD
         }
     };
 
-    let mut red: Vec<f32> = r_c.into_iter().map(|c| c as f32).collect();
-    let mut green: Vec<f32> = g_c.into_iter().map(|c| c as f32).collect();
-    let mut blue: Vec<f32> = b_c.into_iter().map(|c| c as f32).collect();
-    let mut luma: Vec<f32> = l_c.into_iter().map(|c| c as f32).collect();
-
-    let smoothing_sigma = 2.0;
-    apply_gaussian_smoothing(&mut red, smoothing_sigma);
-    apply_gaussian_smoothing(&mut green, smoothing_sigma);
-    apply_gaussian_smoothing(&mut blue, smoothing_sigma);
-    apply_gaussian_smoothing(&mut luma, smoothing_sigma);
-
-    normalize_histogram_range(&mut red, 0.99);
-    normalize_histogram_range(&mut green, 0.99);
-    normalize_histogram_range(&mut blue, 0.99);
-    normalize_histogram_range(&mut luma, 0.99);
-
-    Ok(HistogramData {
-        red,
-        green,
-        blue,
-        luma,
-    })
+    Ok(HistogramData::from_counts(&r_c, &g_c, &b_c, &l_c))
 }
 
 fn apply_gaussian_smoothing(histogram: &mut [f32], sigma: f32) {

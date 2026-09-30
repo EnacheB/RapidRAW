@@ -229,6 +229,9 @@ const GF_NEG_GAIN: f32 = 1.0;
 const GF_BRIGHT_SIGMA: f32 = 0.8;
 const GF_NOISE_LO: f32 = 0.0;
 const GF_NOISE_HI: f32 = 0.01;
+// The Curves graph's histogram: what the curves act on, on the graph's axis. Luma, red,
+// green and blue, 256 bins each, counted for every 4th pixel each way.
+@group(0) @binding(15) var<storage, read_write> curve_histogram: array<atomic<u32>, 1024>;
 
 override HIGH_PRECISION_OUTPUT: u32 = 0u;
 
@@ -1455,6 +1458,44 @@ fn is_default_curve(points: array<Point, 16>, count: u32) -> bool {
     return is_identity && p0_is_origin && p_last_is_end;
 }
 
+// Curves act on scene light, just before the rendering. The graph's axis is that
+// light encoded as sRGB, as a display encodes a picture, so a curve reads like one
+// drawn on the picture: black at 0, mid-grey (0.18) at 0.46 and 1.0 (a RAW's white at
+// zero exposure) at the top. Light past the top carries on along the slope the curve
+// ends with, so nothing is cut off; a curve that ends before the top stays flat after
+// its last point, as drawn.
+fn apply_scene_curve(v: f32, points: array<Point, 16>, count: u32) -> f32 {
+    if (count < 2u) { return v; }
+    let x = linear_to_srgb_extended(vec3<f32>(v)).x;
+    let last = points[count - 1u];
+    var y: f32;
+    if (x > 1.0 && last.x >= 255.0) {
+        let prev = points[count - 2u];
+        let slope = (last.y - prev.y) / max(0.001, last.x - prev.x);
+        y = max(0.0, (last.y + (x - 1.0) * 255.0 * slope) / 255.0);
+    } else {
+        y = apply_curve(x, points, count);
+    }
+    // Below zero (noise around black) values keep their offset from the curve's black.
+    return srgb_to_linear(vec3<f32>(y)).x + min(v, 0.0);
+}
+
+fn curve_histogram_bin(v: f32) -> u32 {
+    return u32(round(clamp(linear_to_srgb_extended(vec3<f32>(v)).x, 0.0, 1.0) * 255.0));
+}
+
+fn count_for_curve_histogram(c: vec3<f32>) {
+    atomicAdd(&curve_histogram[curve_histogram_bin(get_luma(c))], 1u);
+    atomicAdd(&curve_histogram[256u + curve_histogram_bin(c.r)], 1u);
+    atomicAdd(&curve_histogram[512u + curve_histogram_bin(c.g)], 1u);
+    atomicAdd(&curve_histogram[768u + curve_histogram_bin(c.b)], 1u);
+}
+
+// The luma curve maps the pixel's luminance and scales R, G and B together to match,
+// so hue and saturation are left to the rendering. Whatever the curve does at black is
+// added as neutral light rather than scaled: scaling a near-black pixel up to a lifted
+// black would blow its colour noise up into speckle. The R, G and B curves bend each
+// channel, which is what they are for.
 fn apply_all_curves(
     color: vec3<f32>,
     luma_curve: array<Point, 16>, luma_curve_count: u32,
@@ -1462,21 +1503,23 @@ fn apply_all_curves(
     green_curve: array<Point, 16>, green_curve_count: u32,
     blue_curve: array<Point, 16>, blue_curve_count: u32
 ) -> vec3<f32> {
-    var r = apply_curve(color.r, luma_curve, luma_curve_count);
-    var g = apply_curve(color.g, luma_curve, luma_curve_count);
-    var b = apply_curve(color.b, luma_curve, luma_curve_count);
-
+    var c = color;
+    if (!is_default_curve(luma_curve, luma_curve_count)) {
+        let black = apply_scene_curve(0.0, luma_curve, luma_curve_count);
+        let y = max(get_luma(c), 1e-5);
+        let gain = (apply_scene_curve(y, luma_curve, luma_curve_count) - black) / y;
+        c = c * gain + black;
+    }
     if (!is_default_curve(red_curve, red_curve_count)) {
-        r = apply_curve(r, red_curve, red_curve_count);
+        c.r = apply_scene_curve(c.r, red_curve, red_curve_count);
     }
     if (!is_default_curve(green_curve, green_curve_count)) {
-        g = apply_curve(g, green_curve, green_curve_count);
+        c.g = apply_scene_curve(c.g, green_curve, green_curve_count);
     }
     if (!is_default_curve(blue_curve, blue_curve_count)) {
-        b = apply_curve(b, blue_curve, blue_curve_count);
+        c.b = apply_scene_curve(c.b, blue_curve, blue_curve_count);
     }
-
-    return clamp(vec3<f32>(r, g, b), vec3<f32>(0.0), vec3<f32>(1.0));
+    return c;
 }
 
 fn get_mask_influence(mask_index: u32, coords: vec2<u32>) -> f32 {
@@ -1912,6 +1955,30 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
 
+    if (all(absolute_coord % 4u == vec2<u32>(0u))) {
+        count_for_curve_histogram(composite_rgb_linear);
+    }
+    composite_rgb_linear = apply_all_curves(composite_rgb_linear,
+        adjustments.global.luma_curve, adjustments.global.luma_curve_count,
+        adjustments.global.red_curve, adjustments.global.red_curve_count,
+        adjustments.global.green_curve, adjustments.global.green_curve_count,
+        adjustments.global.blue_curve, adjustments.global.blue_curve_count
+    );
+
+    for (var i = 0u; i < adjustments.mask_count; i = i + 1u) {
+        let influence = get_mask_influence(i, absolute_coord);
+        if (influence > 0.001) {
+            let m = adjustments.mask_adjustments[i];
+            let mask_curved = apply_all_curves(composite_rgb_linear,
+                m.luma_curve, m.luma_curve_count,
+                m.red_curve, m.red_curve_count,
+                m.green_curve, m.green_curve_count,
+                m.blue_curve, m.blue_curve_count
+            );
+            composite_rgb_linear = mix(composite_rgb_linear, mask_curved, influence);
+        }
+    }
+
     var default_tonemapped: vec3<f32>;
     if (adjustments.global.tonemapper_mode == 1u) {
         default_tonemapped = agx_full_transform(composite_rgb_linear);
@@ -1940,26 +2007,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     base_srgb = apply_filmic_exposure(base_srgb, t_brightness);
 
-    var final_rgb = apply_all_curves(base_srgb,
-        adjustments.global.luma_curve, adjustments.global.luma_curve_count,
-        adjustments.global.red_curve, adjustments.global.red_curve_count,
-        adjustments.global.green_curve, adjustments.global.green_curve_count,
-        adjustments.global.blue_curve, adjustments.global.blue_curve_count
-    );
-
-    for (var i = 0u; i < adjustments.mask_count; i = i + 1u) {
-        let influence = get_mask_influence(i, absolute_coord);
-        if (influence > 0.001) {
-            let m = adjustments.mask_adjustments[i];
-            let mask_curved_srgb = apply_all_curves(final_rgb,
-                m.luma_curve, m.luma_curve_count,
-                m.red_curve, m.red_curve_count,
-                m.green_curve, m.green_curve_count,
-                m.blue_curve, m.blue_curve_count
-            );
-            final_rgb = mix(final_rgb, mask_curved_srgb, influence);
-        }
-    }
+    var final_rgb = clamp(base_srgb, vec3<f32>(0.0), vec3<f32>(1.0));
 
     if (adjustments.global.has_lut == 1u && adjustments.global.lut_is_scene_referred == 0u) {
         let lut_color = sample_lut_tetrahedral(final_rgb);

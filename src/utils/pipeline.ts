@@ -156,9 +156,11 @@ export const PIPELINE_STAGES: PipelineStage[] = [
   },
   { id: 'colorGrading', phase: 'render', keys: ['colorGrading'], section: 'color', panel: Panel.Adjustments },
   { id: 'vignette', phase: 'render', keys: ['vignetteAmount'], section: 'effects', panel: Panel.Adjustments },
+  // Curves act on scene light, on an axis in stops, just before the rendering.
+  { id: 'curves', phase: 'render', keys: ['curves'], section: 'curves', panel: Panel.Adjustments },
   { id: 'toneMapper', phase: 'render', isActive: () => true, panel: Panel.Adjustments, fixed: true },
   // A scene-referred LUT reads linear light and blends with the tone mapper's output;
-  // a display LUT acts on the finished picture after the curves.
+  // a display LUT acts on the finished picture.
   {
     id: 'sceneLut',
     phase: 'render',
@@ -168,7 +170,6 @@ export const PIPELINE_STAGES: PipelineStage[] = [
     panel: Panel.Adjustments,
   },
   { id: 'brightness', phase: 'render', keys: ['brightness'], section: 'basic', panel: Panel.Adjustments },
-  { id: 'curves', phase: 'render', keys: ['curves'], section: 'curves', panel: Panel.Adjustments },
   {
     id: 'lut',
     phase: 'render',

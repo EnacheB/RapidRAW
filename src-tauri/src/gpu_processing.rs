@@ -750,6 +750,8 @@ pub struct GpuProcessor {
     dummy_lut_view: wgpu::TextureView,
     dummy_lut_sampler: wgpu::Sampler,
     dummy_camera_profile_buffer: wgpu::Buffer,
+    /// Counts the shader makes for the Curves graph's histogram; each render starts it afresh.
+    curve_histogram: wgpu::Buffer,
 }
 
 /// The main pass writing 16-bit floats, for exports. Built on first use.
@@ -804,6 +806,7 @@ pub(crate) fn high_precision_shader_source() -> String {
 
 const FLARE_MAP_SIZE: u32 = 512;
 const MAX_MASK_BINDINGS: u32 = 1;
+const CURVE_HISTOGRAM_BYTES: u64 = 4 * 256 * 4;
 const TILE_SIZE: u32 = 2048;
 
 impl GpuProcessor {
@@ -1177,6 +1180,16 @@ impl GpuProcessor {
             },
             count: None,
         });
+        bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 14 + MAX_MASK_BINDINGS,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        });
 
         bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
             binding: 11 + MAX_MASK_BINDINGS,
@@ -1277,6 +1290,14 @@ impl GpuProcessor {
                 contents: &CameraProfile::disabled_gpu_bytes(),
                 usage: wgpu::BufferUsages::STORAGE,
             });
+        let curve_histogram = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Curve Histogram Buffer"),
+            size: CURVE_HISTOGRAM_BYTES,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         Ok(Self {
             tile: Tile::new(device, wgpu::TextureFormat::Rgba8Unorm),
@@ -1311,6 +1332,7 @@ impl GpuProcessor {
             dummy_lut_view,
             dummy_lut_sampler,
             dummy_camera_profile_buffer,
+            curve_histogram,
         })
     }
 
@@ -1904,6 +1926,10 @@ impl GpuProcessor {
                 .unwrap_or(&self.dummy_camera_profile_buffer)
                 .as_entire_binding(),
         });
+        bind_group_entries.push(wgpu::BindGroupEntry {
+            binding: 14 + MAX_MASK_BINDINGS,
+            resource: self.curve_histogram.as_entire_binding(),
+        });
 
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Main Bind Group"),
@@ -1946,6 +1972,7 @@ impl GpuProcessor {
         let device = &self.context.device;
         let bind_group = self.bind_main_pass(&self.main_bgl, image, &request, &mip_view(output, 0));
         let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.clear_buffer(&self.curve_histogram, 0, None);
         self.encode_main_pass(
             &mut encoder,
             &self.main_pipeline,
@@ -1995,6 +2022,7 @@ impl GpuProcessor {
             }
         };
         let bind_group = self.bind_main_pass(layout, image, &request, &tile.view);
+        queue.write_buffer(&self.curve_histogram, 0, &[0; CURVE_HISTOGRAM_BYTES as usize]);
 
         let output_len = (bounds.width * bounds.height * 4) as usize;
         let mut final_pixels = match output_precision {
@@ -2051,6 +2079,33 @@ impl GpuProcessor {
         }
 
         Ok((final_pixels, bounds.width, bounds.height))
+    }
+
+    /// The Curves graph's histogram counts from the last render: luma, red, green and
+    /// blue, 256 bins each.
+    fn read_curve_histogram(&self) -> Result<Vec<u32>, String> {
+        let device = &self.context.device;
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Curve Histogram Readback"),
+            size: CURVE_HISTOGRAM_BYTES,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(&self.curve_histogram, 0, &staging, 0, CURVE_HISTOGRAM_BYTES);
+        let submission = self.context.queue.submit(Some(encoder.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        wait_for_gpu(device, Some(submission))?;
+        rx.recv()
+            .map_err(|e| format!("Failed receiving GPU map result: {}", e))?
+            .map_err(|e| e.to_string())?;
+        let counts = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
+        staging.unmap();
+        Ok(counts)
     }
 }
 
@@ -2174,6 +2229,7 @@ pub fn render_to_display(
         let _ = analytics.sender.send(crate::AnalyticsJob {
             path: analytics.path,
             image: Arc::new(DynamicImage::ImageRgba8(mip)),
+            curve_histogram: processor.read_curve_histogram()?,
             compute_waveform: analytics.compute_waveform,
             active_waveform_channel: analytics.active_waveform_channel,
         });
@@ -2298,6 +2354,7 @@ fn process_and_get_dynamic_image_inner(
     if let Some(analytics) = analytics_config {
         if let RenderedPixels::U8(pixels) = &processed_pixels {
             let pixels_clone = pixels.clone();
+            let curve_histogram = processor.read_curve_histogram()?;
             std::thread::spawn(move || {
                 if let Some(img_buf) =
                     ImageBuffer::<Rgba<u8>, _>::from_raw(out_w, out_h, pixels_clone)
@@ -2306,6 +2363,7 @@ fn process_and_get_dynamic_image_inner(
                     let _ = analytics.sender.send(crate::AnalyticsJob {
                         path: analytics.path,
                         image: std::sync::Arc::new(dynamic_img),
+                        curve_histogram,
                         compute_waveform: analytics.compute_waveform,
                         active_waveform_channel: analytics.active_waveform_channel,
                     });

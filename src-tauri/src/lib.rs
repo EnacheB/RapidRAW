@@ -871,7 +871,9 @@ fn start_analytics_worker(app_handle: tauri::AppHandle) {
                 job = latest;
             }
 
-            let histogram_data = image_processing::calculate_histogram_from_image(&job.image).ok();
+            let histogram_data = image_processing::calculate_histogram_from_image(&job.image)
+                .ok()
+                .map(|histogram| histogram.with_curve_histogram(&job.curve_histogram));
 
             let waveform_data = if job.compute_waveform {
                 image_processing::calculate_waveform_from_image(

@@ -33,9 +33,17 @@ interface ColorData {
   data: any;
 }
 
+export interface HistogramData {
+  red: Array<number>;
+  green: Array<number>;
+  blue: Array<number>;
+  luma: Array<number>;
+  curve?: HistogramData;
+}
+
 interface CurveGraphProps {
   adjustments: Adjustments | any;
-  histogram: ChannelConfig | null;
+  histogram: HistogramData | null;
   isForMask?: boolean;
   setAdjustments(updater: (prev: any) => any): void;
   theme: string;
@@ -477,14 +485,17 @@ export default function CurveGraph({
   const isLightTheme = theme === Theme.Light || theme === Theme.Arctic;
   const histogramOpacity = isLightTheme ? 0.6 : 0.15;
 
+  // Curves act on scene light before the rendering, so the graph shows the histogram
+  // of that light (`curve`), not of the finished picture.
+  const curveHistogram = histogram?.curve;
   const channelConfig: ChannelConfig = useMemo(
     () => ({
-      luma: { color: 'var(--color-accent)', data: histogram?.luma },
-      red: { color: '#FF6B6B', data: histogram?.red },
-      green: { color: '#6BCB77', data: histogram?.green },
-      blue: { color: '#4D96FF', data: histogram?.blue },
+      luma: { color: 'var(--color-accent)', data: curveHistogram?.luma },
+      red: { color: '#FF6B6B', data: curveHistogram?.red },
+      green: { color: '#6BCB77', data: curveHistogram?.green },
+      blue: { color: '#4D96FF', data: curveHistogram?.blue },
     }),
-    [histogram],
+    [curveHistogram],
   );
 
   const inactiveChannels = Object.keys(channelConfig).filter((channel) => channel !== activeChannel);

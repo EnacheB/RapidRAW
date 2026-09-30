@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { Adjustments, INITIAL_ADJUSTMENTS, MaskContainer, AiPatch } from '../utils/adjustments';
 import { SelectedImage, WaveformData, BrushSettings } from '../components/ui/AppProperties';
-import { ChannelConfig } from '../components/adjustments/Curves';
+import { HistogramData } from '../components/adjustments/Curves';
 import { ImageDimensions } from '../hooks/useImageRenderSize';
 import { ToolType } from '../components/panel/right/Masks';
 import { OverlayMode } from '../components/panel/right/CropPanel';
@@ -40,7 +40,7 @@ interface EditorState {
   showOriginal: boolean;
 
   // Analytics
-  histogram: ChannelConfig | null;
+  histogram: HistogramData | null;
   waveform: WaveformData | null;
   isWaveformVisible: boolean;
   activeWaveformChannel: string;

@@ -228,7 +228,9 @@ fn illuminant_temperature(illuminant: u16) -> f64 {
     }
 }
 
-fn srgb_encode(v: f32) -> f32 {
+/// Linear light to an sRGB-encoded display value, clipped to [0, 1].
+pub(crate) fn srgb_encode(v: f32) -> f32 {
+    let v = v.clamp(0.0, 1.0);
     if v <= 0.0031308 {
         v * 12.92
     } else {
@@ -236,12 +238,17 @@ fn srgb_encode(v: f32) -> f32 {
     }
 }
 
-fn srgb_decode(v: f32) -> f32 {
+pub(crate) fn srgb_decode(v: f32) -> f32 {
     if v <= 0.04045 {
         v / 12.92
     } else {
         ((v + 0.055) / 1.055).powf(2.4)
     }
+}
+
+/// Rec.709 luminance.
+pub(crate) fn luma(c: [f32; 3]) -> f32 {
+    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
 }
 
 // ---------------------------------------------------------------------------
@@ -322,7 +329,7 @@ impl HsvTable {
             bilinear(0)
         } else {
             if self.srgb {
-                v_encoded = srgb_encode(v.clamp(0.0, 1.0));
+                v_encoded = srgb_encode(v);
             }
             let v_scaled = v_encoded * (self.val - 1) as f32;
             let v0 = (v_scaled as u32).min(self.val - 2);
@@ -910,16 +917,11 @@ impl CameraProfile {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuHeader {
-    input_matrix: [[f32; 4]; 3],
-    output_matrix: [[f32; 4]; 3],
+    input_matrix: GpuMat3,
+    output_matrix: GpuMat3,
     look_table: [u32; 4],
     tone_curve: [u32; 4],
     flags: [u32; 4],
-}
-
-fn gpu_mat3(m: &[[f32; 3]; 3]) -> [[f32; 4]; 3] {
-    // WGSL matrices are column-major.
-    [0, 1, 2].map(|c| [m[0][c], m[1][c], m[2][c], 0.0])
 }
 
 impl CameraProfile {
@@ -934,7 +936,7 @@ impl CameraProfile {
             Some(curve) => rgb_tone(curve, c),
             None => c.map(|x| x.clamp(0.0, 1.0)),
         };
-        mat_vec_f32(&self.prophoto_to_working, c).map(|x| srgb_encode(x.clamp(0.0, 1.0)))
+        mat_vec_f32(&self.prophoto_to_working, c).map(srgb_encode)
     }
 
     /// Storage-buffer contents for `shaders/camera_profile.wgsl`.
@@ -965,8 +967,8 @@ impl CameraProfile {
         }
         let look_srgb = self.look_table.as_ref().is_some_and(|t| t.srgb);
         let header = GpuHeader {
-            input_matrix: gpu_mat3(&self.working_to_prophoto),
-            output_matrix: gpu_mat3(&self.prophoto_to_working),
+            input_matrix: GpuMat3::from_rows(self.working_to_prophoto),
+            output_matrix: GpuMat3::from_rows(self.prophoto_to_working),
             look_table,
             tone_curve,
             flags: [1, look_srgb as u32, 0, 0],

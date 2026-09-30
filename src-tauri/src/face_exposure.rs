@@ -17,6 +17,7 @@ use ort::session::Session;
 use ort::value::Tensor;
 use serde_json::{Value, json};
 
+use crate::camera_profile::{luma, srgb_decode, srgb_encode};
 use crate::image_processing::{apply_cpu_agx_tonemap, downscale_f32_image};
 
 static YUNET_MODEL: &[u8] = include_bytes!("../models/face_detection_yunet_2023mar.onnx");
@@ -142,30 +143,6 @@ fn yunet() -> Option<&'static Mutex<Session>> {
             }
         })
         .as_ref()
-}
-
-#[inline]
-fn luma(c: [f32; 3]) -> f32 {
-    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
-}
-
-#[inline]
-fn srgb_encode(v: f32) -> f32 {
-    let v = v.clamp(0.0, 1.0);
-    if v <= 0.0031308 {
-        v * 12.92
-    } else {
-        1.055 * v.powf(1.0 / 2.4) - 0.055
-    }
-}
-
-#[inline]
-fn srgb_decode(v: f32) -> f32 {
-    if v <= 0.04045 {
-        v / 12.92
-    } else {
-        ((v + 0.055) / 1.055).powf(2.4)
-    }
 }
 
 #[inline]

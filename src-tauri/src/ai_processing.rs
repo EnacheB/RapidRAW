@@ -1205,6 +1205,19 @@ pub fn run_lama_inpainting(
     Ok(final_image)
 }
 
+/// A RAW's warped image keeps highlights above white; these models see an 8-bit photo,
+/// so clip first, or the resize spreads blown areas into their neighbours.
+fn clipped(image: &DynamicImage) -> std::borrow::Cow<'_, DynamicImage> {
+    match image {
+        DynamicImage::ImageRgb32F(_) | DynamicImage::ImageRgba32F(_) => {
+            let mut rgb = image.to_rgb32f();
+            rgb.par_iter_mut().for_each(|v| *v = v.clamp(0.0, 1.0));
+            std::borrow::Cow::Owned(DynamicImage::ImageRgb32F(rgb))
+        }
+        _ => std::borrow::Cow::Borrowed(image),
+    }
+}
+
 pub fn generate_image_embeddings(
     image: &DynamicImage,
     encoder: &Mutex<Session>,
@@ -1216,7 +1229,7 @@ pub fn generate_image_embeddings(
     let new_width = (orig_width as f32 * scale).round() as u32;
     let new_height = (orig_height as f32 * scale).round() as u32;
 
-    let resized_image = image.resize(new_width, new_height, FilterType::Triangle);
+    let resized_image = clipped(image).resize(new_width, new_height, FilterType::Triangle);
     let rgb_image = resized_image.into_rgb8();
     let (actual_width, actual_height) = rgb_image.dimensions();
     let raw_pixels = rgb_image.as_raw();
@@ -1517,7 +1530,8 @@ pub fn run_sky_seg_model(
 ) -> Result<GrayImage> {
     let (orig_width, orig_height) = image.dimensions();
 
-    let resized_image = image.resize(SKYSEG_INPUT_SIZE, SKYSEG_INPUT_SIZE, FilterType::Triangle);
+    let resized_image =
+        clipped(image).resize(SKYSEG_INPUT_SIZE, SKYSEG_INPUT_SIZE, FilterType::Triangle);
     let (resized_w, resized_h) = resized_image.dimensions();
     let resized_rgb = resized_image.into_rgb8();
     let raw_pixels = resized_rgb.as_raw();
@@ -1598,7 +1612,8 @@ pub fn run_u2netp_model(
 ) -> Result<GrayImage> {
     let (orig_width, orig_height) = image.dimensions();
 
-    let resized_image = image.resize(U2NETP_INPUT_SIZE, U2NETP_INPUT_SIZE, FilterType::Triangle);
+    let resized_image =
+        clipped(image).resize(U2NETP_INPUT_SIZE, U2NETP_INPUT_SIZE, FilterType::Triangle);
     let (resized_w, resized_h) = resized_image.dimensions();
     let resized_rgb = resized_image.into_rgb8();
     let raw_pixels = resized_rgb.as_raw();
@@ -1677,7 +1692,8 @@ pub fn run_depth_anything_model(
     image: &DynamicImage,
     depth_session: &Mutex<Session>,
 ) -> Result<GrayImage> {
-    let resized_image = image.resize(DEPTH_INPUT_SIZE, DEPTH_INPUT_SIZE, FilterType::Triangle);
+    let resized_image =
+        clipped(image).resize(DEPTH_INPUT_SIZE, DEPTH_INPUT_SIZE, FilterType::Triangle);
     let (resized_w, resized_h) = resized_image.dimensions();
     let resized_rgb = resized_image.into_rgb8();
     let raw_pixels = resized_rgb.as_raw();
@@ -1798,10 +1814,11 @@ pub fn run_normal_model(
     image: &DynamicImage,
     normal_session: &Mutex<Session>,
 ) -> Result<RgbaImage> {
+    let image = clipped(image);
     let resized_image = if image.width().max(image.height()) > NORMAL_MAX_SIZE {
         image.resize(NORMAL_MAX_SIZE, NORMAL_MAX_SIZE, FilterType::Triangle)
     } else {
-        image.clone()
+        image.into_owned()
     };
     let (resized_w, resized_h) = resized_image.dimensions();
     let resized_rgb = resized_image.into_rgb8();

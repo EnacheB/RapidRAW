@@ -1212,27 +1212,20 @@ pub fn transform_point(
     (px, py)
 }
 
+const DEFAULT_RAW_GAMMA: f32 = 2.38;
+const DEFAULT_RAW_CONTRAST: f32 = 1.28;
+
+/// The CPU default look for one linear RAW value: a gamma and some contrast,
+/// not clipped to [0, 1].
+pub fn cpu_default_raw_look(v: f32) -> f32 {
+    (v.powf(1.0 / DEFAULT_RAW_GAMMA) - 0.5) * DEFAULT_RAW_CONTRAST + 0.5
+}
+
 pub fn apply_cpu_default_raw_processing(image: &mut DynamicImage) {
     let mut f32_image = image.to_rgb32f();
-
-    const GAMMA: f32 = 2.38;
-    const INV_GAMMA: f32 = 1.0 / GAMMA;
-    const CONTRAST: f32 = 1.28;
-
-    f32_image.par_chunks_mut(3).for_each(|pixel_chunk| {
-        let r_gamma = pixel_chunk[0].powf(INV_GAMMA);
-        let g_gamma = pixel_chunk[1].powf(INV_GAMMA);
-        let b_gamma = pixel_chunk[2].powf(INV_GAMMA);
-
-        let r_contrast = (r_gamma - 0.5) * CONTRAST + 0.5;
-        let g_contrast = (g_gamma - 0.5) * CONTRAST + 0.5;
-        let b_contrast = (b_gamma - 0.5) * CONTRAST + 0.5;
-
-        pixel_chunk[0] = r_contrast.clamp(0.0, 1.0);
-        pixel_chunk[1] = g_contrast.clamp(0.0, 1.0);
-        pixel_chunk[2] = b_contrast.clamp(0.0, 1.0);
-    });
-
+    f32_image
+        .par_iter_mut()
+        .for_each(|v| *v = cpu_default_raw_look(*v).clamp(0.0, 1.0));
     *image = DynamicImage::ImageRgb32F(f32_image);
 }
 

@@ -12,7 +12,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use crate::app_state::AppState;
-use crate::image_processing::{apply_cpu_default_raw_processing, apply_geometry_warp};
+use crate::image_processing::apply_geometry_warp;
 use crate::{get_cached_full_warped_image, get_cached_full_warped_image_for_path};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -1009,6 +1009,22 @@ fn generate_ai_depth_bitmap(
     Ok(Some(mask))
 }
 
+/// The pixel in 0..255 units, as floats: no 8-bit steps, and tones above white
+/// stay apart instead of all reading 255.
+fn sample_rgb(image: &DynamicImage, x: u32, y: u32) -> [f32; 3] {
+    match image {
+        DynamicImage::ImageRgb32F(img) => img.get_pixel(x, y).0.map(|v| v * 255.0),
+        DynamicImage::ImageRgba32F(img) => {
+            let [r, g, b, _] = img.get_pixel(x, y).0;
+            [r * 255.0, g * 255.0, b * 255.0]
+        }
+        _ => {
+            let [r, g, b, _] = image.get_pixel(x, y).0;
+            [r as f32, g as f32, b as f32]
+        }
+    }
+}
+
 fn generate_color_bitmap(
     params_value: &Value,
     width: u32,
@@ -1030,10 +1046,7 @@ fn generate_color_bitmap(
         return Err(format!("picked pixel ({target_x}, {target_y}) is outside the image"));
     }
 
-    let ref_pixel = warped.get_pixel(target_x as u32, target_y as u32);
-    let ref_r = ref_pixel[0] as f32;
-    let ref_g = ref_pixel[1] as f32;
-    let ref_b = ref_pixel[2] as f32;
+    let [ref_r, ref_g, ref_b] = sample_rgb(warped, target_x as u32, target_y as u32);
 
     let mut mask = GrayImage::new(width, height);
 
@@ -1095,10 +1108,8 @@ fn generate_color_bitmap(
                 let y_src = (y_unrotated_coarse * inv_scale) as u32;
 
                 if x_src < full_w && y_src < full_h {
-                    let pixel = warped.get_pixel(x_src, y_src);
-                    let dist_sq = (pixel[0] as f32 - ref_r).powi(2)
-                        + (pixel[1] as f32 - ref_g).powi(2)
-                        + (pixel[2] as f32 - ref_b).powi(2);
+                    let [r, g, b] = sample_rgb(warped, x_src, y_src);
+                    let dist_sq = (r - ref_r).powi(2) + (g - ref_g).powi(2) + (b - ref_b).powi(2);
 
                     if dist_sq <= tolerance_sq {
                         let intensity = 1.0 - (dist_sq.sqrt() / tolerance_sq.sqrt());
@@ -1134,9 +1145,8 @@ fn generate_luminance_bitmap(
         return Err(format!("picked pixel ({target_x}, {target_y}) is outside the image"));
     }
 
-    let ref_pixel = warped.get_pixel(target_x as u32, target_y as u32);
-    let ref_luma =
-        0.299 * ref_pixel[0] as f32 + 0.587 * ref_pixel[1] as f32 + 0.114 * ref_pixel[2] as f32;
+    let [r, g, b] = sample_rgb(warped, target_x as u32, target_y as u32);
+    let ref_luma = 0.299 * r + 0.587 * g + 0.114 * b;
 
     let mut mask = GrayImage::new(width, height);
 
@@ -1198,9 +1208,8 @@ fn generate_luminance_bitmap(
                 let y_src = (y_unrotated_coarse * inv_scale) as u32;
 
                 if x_src < full_w && y_src < full_h {
-                    let pixel = warped.get_pixel(x_src, y_src);
-                    let luma =
-                        0.299 * pixel[0] as f32 + 0.587 * pixel[1] as f32 + 0.114 * pixel[2] as f32;
+                    let [r, g, b] = sample_rgb(warped, x_src, y_src);
+                    let luma = 0.299 * r + 0.587 * g + 0.114 * b;
                     let dist = (luma - ref_luma).abs();
 
                     if dist <= tolerance_val {
@@ -1446,12 +1455,18 @@ pub fn resolve_warped_image_for_masks(
     }
 }
 
+/// The image the AI models see and colour and luminance masks sample, before
+/// geometry: the decoded photo, a RAW with the CPU default look. Unlike
+/// apply_cpu_default_raw_processing, values above white are kept, so masks can
+/// tell bright tones apart; the models' 8-bit input clips them as before.
 pub fn build_full_source_image(base_image: &DynamicImage, is_raw: bool) -> Cow<'_, DynamicImage> {
-    let mut image = Cow::Borrowed(base_image);
-    if is_raw {
-        apply_cpu_default_raw_processing(image.to_mut());
+    if !is_raw {
+        return Cow::Borrowed(base_image);
     }
-    image
+    let mut look = base_image.to_rgb32f();
+    look.par_iter_mut()
+        .for_each(|v| *v = crate::image_processing::cpu_default_raw_look(*v).max(0.0));
+    Cow::Owned(DynamicImage::ImageRgb32F(look))
 }
 
 pub fn build_full_warped_image<'a>(

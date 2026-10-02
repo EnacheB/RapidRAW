@@ -1,6 +1,4 @@
-use crate::ai_processing::{
-    AiDepthMaskParameters, AiForegroundMaskParameters, AiSkyMaskParameters, AiSubjectMaskParameters,
-};
+use crate::ai_processing::AiDepthMaskParameters;
 use base64::{Engine as _, engine::general_purpose};
 use image::{DynamicImage, GenericImageView, GrayImage, ImageFormat, Luma, Rgba, RgbaImage};
 use rayon::prelude::*;
@@ -46,6 +44,11 @@ fn default_opacity() -> f32 {
     100.0
 }
 
+/// A sub-mask's parameters as `T`, or why they don't fit.
+fn parse_params<T: serde::de::DeserializeOwned>(params: &Value) -> Result<T, String> {
+    serde_json::from_value(params.clone()).map_err(|e| e.to_string())
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 #[serde(crate = "serde")]
 #[serde(rename_all = "camelCase")]
@@ -58,6 +61,26 @@ pub struct MaskDefinition {
     pub opacity: f32,
     pub adjustments: Value,
     pub sub_masks: Vec<SubMask>,
+}
+
+/// The masks in `adjustments`. A mask that doesn't parse is logged and left out
+/// on its own. The mask bitmaps and the mask adjustments both come from this
+/// list, so they stay paired.
+pub fn parse_masks(adjustments: &Value) -> Vec<MaskDefinition> {
+    let Some(masks) = adjustments.get("masks").and_then(|m| m.as_array()) else {
+        return Vec::new();
+    };
+    masks
+        .iter()
+        .filter_map(|m| {
+            serde_json::from_value(m.clone())
+                .map_err(|e| {
+                    let name = m.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+                    log::error!("mask '{name}' left out: {e}");
+                })
+                .ok()
+        })
+        .collect()
 }
 
 impl MaskDefinition {
@@ -90,15 +113,6 @@ pub struct AiPatchDefinition {
     #[serde(default = "default_opacity")]
     pub opacity: f32,
     pub sub_masks: Vec<SubMask>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-#[serde(rename_all = "camelCase")]
-struct GrowFeatherParameters {
-    #[serde(default)]
-    grow: f32,
-    #[serde(default)]
-    feather: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -192,8 +206,11 @@ struct FlowMaskParameters {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ParametricMaskParameters {
-    target_x: f64,
-    target_y: f64,
+    // The picked pixel in the uncropped image; see `target`.
+    #[serde(default)]
+    target_x: Option<f64>,
+    #[serde(default)]
+    target_y: Option<f64>,
     #[serde(default = "default_tolerance")]
     tolerance: f32,
     #[serde(default)]
@@ -214,11 +231,21 @@ fn default_tolerance() -> f32 {
     20.0
 }
 
+impl ParametricMaskParameters {
+    /// The picked pixel, or None until one is picked (the editor stores -10000 then).
+    fn target(&self) -> Option<(f64, f64)> {
+        match (self.target_x, self.target_y) {
+            (Some(x), Some(y)) if x >= 0.0 && y >= 0.0 => Some((x, y)),
+            _ => None,
+        }
+    }
+}
+
 impl Default for ParametricMaskParameters {
     fn default() -> Self {
         Self {
-            target_x: 0.0,
-            target_y: 0.0,
+            target_x: None,
+            target_y: None,
             tolerance: default_tolerance(),
             grow: 0.0,
             feather: 35.0,
@@ -544,9 +571,8 @@ fn generate_radial_bitmap(
     height: u32,
     scale: f32,
     crop_offset: (f32, f32),
-) -> GrayImage {
-    let params: RadialMaskParameters =
-        serde_json::from_value(params_value.clone()).unwrap_or_default();
+) -> Result<GrayImage, String> {
+    let params: RadialMaskParameters = parse_params(params_value)?;
     let mut mask = GrayImage::new(width, height);
 
     let center_x = (params.center_x as f32 * scale - crop_offset.0) as i32;
@@ -579,7 +605,7 @@ fn generate_radial_bitmap(
         }
     }
 
-    mask
+    Ok(mask)
 }
 
 fn generate_linear_bitmap(
@@ -588,9 +614,8 @@ fn generate_linear_bitmap(
     height: u32,
     scale: f32,
     crop_offset: (f32, f32),
-) -> GrayImage {
-    let params: LinearMaskParameters =
-        serde_json::from_value(params_value.clone()).unwrap_or_default();
+) -> Result<GrayImage, String> {
+    let params: LinearMaskParameters = parse_params(params_value)?;
     let mut mask = GrayImage::new(width, height);
 
     let start_x = params.start_x as f32 * scale - crop_offset.0;
@@ -605,7 +630,7 @@ fn generate_linear_bitmap(
     let len_sq = line_vec_x.powi(2) + line_vec_y.powi(2);
 
     if len_sq < 0.01 {
-        return mask;
+        return Ok(mask);
     }
 
     let perp_vec_x = -line_vec_y / len_sq.sqrt();
@@ -633,7 +658,7 @@ fn generate_linear_bitmap(
         }
     }
 
-    mask
+    Ok(mask)
 }
 
 fn generate_brush_bitmap(
@@ -642,9 +667,8 @@ fn generate_brush_bitmap(
     height: u32,
     scale: f32,
     crop_offset: (f32, f32),
-) -> GrayImage {
-    let params: BrushMaskParameters =
-        serde_json::from_value(params_value.clone()).unwrap_or_default();
+) -> Result<GrayImage, String> {
+    let params: BrushMaskParameters = parse_params(params_value)?;
     let mut final_mask = GrayImage::new(width, height);
 
     for line in &params.lines {
@@ -700,7 +724,7 @@ fn generate_brush_bitmap(
         }
     }
 
-    final_mask
+    Ok(final_mask)
 }
 
 fn generate_flow_bitmap(
@@ -709,9 +733,8 @@ fn generate_flow_bitmap(
     height: u32,
     scale: f32,
     crop_offset: (f32, f32),
-) -> GrayImage {
-    let params: FlowMaskParameters =
-        serde_json::from_value(params_value.clone()).unwrap_or_default();
+) -> Result<GrayImage, String> {
+    let params: FlowMaskParameters = parse_params(params_value)?;
     let mut final_mask = GrayImage::new(width, height);
 
     for line in &params.lines {
@@ -771,7 +794,7 @@ fn generate_flow_bitmap(
         }
     }
 
-    final_mask
+    Ok(final_mask)
 }
 
 pub struct TransformParams {
@@ -857,52 +880,87 @@ fn generate_ai_bitmap_from_full_mask(
     final_mask
 }
 
-pub fn generate_ai_bitmap_from_base64(data_url: &str, tf: &TransformParams) -> Option<GrayImage> {
+pub fn generate_ai_bitmap_from_base64(
+    data_url: &str,
+    tf: &TransformParams,
+) -> Result<GrayImage, String> {
     let b64_data = if let Some(idx) = data_url.find(',') {
         &data_url[idx + 1..]
     } else {
         data_url
     };
 
-    let decoded_bytes = general_purpose::STANDARD.decode(b64_data).ok()?;
-    let full_mask_image = image::load_from_memory(&decoded_bytes).ok()?.to_luma8();
+    let decoded_bytes = general_purpose::STANDARD
+        .decode(b64_data)
+        .map_err(|e| format!("mask data: {e}"))?;
+    let full_mask_image = image::load_from_memory(&decoded_bytes)
+        .map_err(|e| format!("mask data: {e}"))?
+        .to_luma8();
 
-    Some(generate_ai_bitmap_from_full_mask(&full_mask_image, tf))
+    Ok(generate_ai_bitmap_from_full_mask(&full_mask_image, tf))
 }
 
-fn generate_ai_sky_bitmap(
+/// What every AI sub-mask stores for rendering: the mask over the whole image
+/// (a PNG data URL, absent until the model has run), the orientation it was
+/// made under, and grow/feather. The box or point a subject mask was picked
+/// with only matters for making the mask, so it isn't needed here.
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct AiMaskData {
+    mask_data_base64: Option<String>,
+    rotation: Option<f32>,
+    flip_horizontal: Option<bool>,
+    flip_vertical: Option<bool>,
+    orientation_steps: Option<u8>,
+    grow: Option<f32>,
+    feather: Option<f32>,
+}
+
+impl AiMaskData {
+    /// The stored mask mapped onto the output, or None if it hasn't been made yet.
+    fn bitmap(
+        &self,
+        width: u32,
+        height: u32,
+        scale: f32,
+        crop_offset: (f32, f32),
+    ) -> Result<Option<GrayImage>, String> {
+        let Some(data_url) = &self.mask_data_base64 else {
+            return Ok(None);
+        };
+        let tf = TransformParams {
+            rotation: self.rotation.unwrap_or(0.0),
+            flip_horizontal: self.flip_horizontal.unwrap_or(false),
+            flip_vertical: self.flip_vertical.unwrap_or(false),
+            orientation_steps: self.orientation_steps.unwrap_or(0),
+            width,
+            height,
+            scale,
+            crop_offset,
+        };
+        generate_ai_bitmap_from_base64(data_url, &tf).map(Some)
+    }
+
+    fn grow_and_feather(&self, mask: &mut GrayImage, width: u32, height: u32) {
+        let (grow, feather) = (self.grow.unwrap_or(0.0), self.feather.unwrap_or(0.0));
+        apply_grow_and_feather(mask, grow, feather, width, height);
+    }
+}
+
+/// Sky, foreground, subject and quick-eraser masks: the stored mask, grown and feathered.
+fn generate_ai_bitmap(
     params_value: &Value,
     width: u32,
     height: u32,
     scale: f32,
     crop_offset: (f32, f32),
-) -> Option<GrayImage> {
-    let params: AiSkyMaskParameters = serde_json::from_value(params_value.clone()).ok()?;
-    let grow_feather: GrowFeatherParameters =
-        serde_json::from_value(params_value.clone()).unwrap_or_default();
-    let data_url = params.mask_data_base64?;
-
-    let tf = TransformParams {
-        rotation: params.rotation.unwrap_or(0.0),
-        flip_horizontal: params.flip_horizontal.unwrap_or(false),
-        flip_vertical: params.flip_vertical.unwrap_or(false),
-        orientation_steps: params.orientation_steps.unwrap_or(0),
-        width,
-        height,
-        scale,
-        crop_offset,
+) -> Result<Option<GrayImage>, String> {
+    let data: AiMaskData = parse_params(params_value)?;
+    let Some(mut mask) = data.bitmap(width, height, scale, crop_offset)? else {
+        return Ok(None);
     };
-    let mut mask = generate_ai_bitmap_from_base64(&data_url, &tf)?;
-
-    apply_grow_and_feather(
-        &mut mask,
-        grow_feather.grow,
-        grow_feather.feather,
-        width,
-        height,
-    );
-
-    Some(mask)
+    data.grow_and_feather(&mut mask, width, height);
+    Ok(Some(mask))
 }
 
 fn generate_ai_depth_bitmap(
@@ -911,24 +969,12 @@ fn generate_ai_depth_bitmap(
     height: u32,
     scale: f32,
     crop_offset: (f32, f32),
-) -> Option<GrayImage> {
-    let params: AiDepthMaskParameters = serde_json::from_value(params_value.clone()).ok()?;
-    let grow_feather: GrowFeatherParameters =
-        serde_json::from_value(params_value.clone()).unwrap_or_default();
-    let data_url = params.mask_data_base64?;
-
-    let tf = TransformParams {
-        rotation: params.rotation.unwrap_or(0.0),
-        flip_horizontal: params.flip_horizontal.unwrap_or(false),
-        flip_vertical: params.flip_vertical.unwrap_or(false),
-        orientation_steps: params.orientation_steps.unwrap_or(0),
-        width,
-        height,
-        scale,
-        crop_offset,
+) -> Result<Option<GrayImage>, String> {
+    let params: AiDepthMaskParameters = parse_params(params_value)?;
+    let data: AiMaskData = parse_params(params_value)?;
+    let Some(depth_map) = data.bitmap(width, height, scale, crop_offset)? else {
+        return Ok(None);
     };
-
-    let depth_map = generate_ai_bitmap_from_base64(&data_url, &tf)?;
 
     let (w, h) = depth_map.dimensions();
     let mut mask = GrayImage::new(w, h);
@@ -958,85 +1004,9 @@ fn generate_ai_depth_bitmap(
         mask = image::imageops::blur(&mask, params.feather * 0.1);
     }
 
-    apply_grow_and_feather(
-        &mut mask,
-        grow_feather.grow,
-        grow_feather.feather,
-        width,
-        height,
-    );
+    data.grow_and_feather(&mut mask, width, height);
 
-    Some(mask)
-}
-
-fn generate_ai_foreground_bitmap(
-    params_value: &Value,
-    width: u32,
-    height: u32,
-    scale: f32,
-    crop_offset: (f32, f32),
-) -> Option<GrayImage> {
-    let params: AiForegroundMaskParameters = serde_json::from_value(params_value.clone()).ok()?;
-    let grow_feather: GrowFeatherParameters =
-        serde_json::from_value(params_value.clone()).unwrap_or_default();
-    let data_url = params.mask_data_base64?;
-
-    let tf = TransformParams {
-        rotation: params.rotation.unwrap_or(0.0),
-        flip_horizontal: params.flip_horizontal.unwrap_or(false),
-        flip_vertical: params.flip_vertical.unwrap_or(false),
-        orientation_steps: params.orientation_steps.unwrap_or(0),
-        width,
-        height,
-        scale,
-        crop_offset,
-    };
-    let mut mask = generate_ai_bitmap_from_base64(&data_url, &tf)?;
-
-    apply_grow_and_feather(
-        &mut mask,
-        grow_feather.grow,
-        grow_feather.feather,
-        width,
-        height,
-    );
-
-    Some(mask)
-}
-
-fn generate_ai_subject_bitmap(
-    params_value: &Value,
-    width: u32,
-    height: u32,
-    scale: f32,
-    crop_offset: (f32, f32),
-) -> Option<GrayImage> {
-    let params: AiSubjectMaskParameters = serde_json::from_value(params_value.clone()).ok()?;
-    let grow_feather: GrowFeatherParameters =
-        serde_json::from_value(params_value.clone()).unwrap_or_default();
-    let data_url = params.mask_data_base64?;
-
-    let tf = TransformParams {
-        rotation: params.rotation.unwrap_or(0.0),
-        flip_horizontal: params.flip_horizontal.unwrap_or(false),
-        flip_vertical: params.flip_vertical.unwrap_or(false),
-        orientation_steps: params.orientation_steps.unwrap_or(0),
-        width,
-        height,
-        scale,
-        crop_offset,
-    };
-    let mut mask = generate_ai_bitmap_from_base64(&data_url, &tf)?;
-
-    apply_grow_and_feather(
-        &mut mask,
-        grow_feather.grow,
-        grow_feather.feather,
-        width,
-        height,
-    );
-
-    Some(mask)
+    Ok(Some(mask))
 }
 
 fn generate_color_bitmap(
@@ -1046,15 +1016,18 @@ fn generate_color_bitmap(
     scale: f32,
     crop_offset: (f32, f32),
     warped_image: Option<&image::DynamicImage>,
-) -> Option<GrayImage> {
-    let params: ParametricMaskParameters = serde_json::from_value(params_value.clone()).ok()?;
-    let warped = warped_image?;
+) -> Result<Option<GrayImage>, String> {
+    let params: ParametricMaskParameters = parse_params(params_value)?;
+    let Some((target_x, target_y)) = params.target() else {
+        return Ok(None);
+    };
+    let warped = warped_image.ok_or("no image to sample")?;
     let (full_w, full_h) = warped.dimensions();
 
-    let target_x = params.target_x.round() as i32;
-    let target_y = params.target_y.round() as i32;
+    let target_x = target_x.round() as i32;
+    let target_y = target_y.round() as i32;
     if target_x < 0 || target_y < 0 || target_x >= full_w as i32 || target_y >= full_h as i32 {
-        return None;
+        return Err(format!("picked pixel ({target_x}, {target_y}) is outside the image"));
     }
 
     let ref_pixel = warped.get_pixel(target_x as u32, target_y as u32);
@@ -1137,7 +1110,7 @@ fn generate_color_bitmap(
     }
 
     apply_grow_and_feather(&mut mask, params.grow, params.feather, width, height);
-    Some(mask)
+    Ok(Some(mask))
 }
 
 fn generate_luminance_bitmap(
@@ -1147,15 +1120,18 @@ fn generate_luminance_bitmap(
     scale: f32,
     crop_offset: (f32, f32),
     warped_image: Option<&image::DynamicImage>,
-) -> Option<GrayImage> {
-    let params: ParametricMaskParameters = serde_json::from_value(params_value.clone()).ok()?;
-    let warped = warped_image?;
+) -> Result<Option<GrayImage>, String> {
+    let params: ParametricMaskParameters = parse_params(params_value)?;
+    let Some((target_x, target_y)) = params.target() else {
+        return Ok(None);
+    };
+    let warped = warped_image.ok_or("no image to sample")?;
     let (full_w, full_h) = warped.dimensions();
 
-    let target_x = params.target_x.round() as i32;
-    let target_y = params.target_y.round() as i32;
+    let target_x = target_x.round() as i32;
+    let target_y = target_y.round() as i32;
     if target_x < 0 || target_y < 0 || target_x >= full_w as i32 || target_y >= full_h as i32 {
-        return None;
+        return Err(format!("picked pixel ({target_x}, {target_y}) is outside the image"));
     }
 
     let ref_pixel = warped.get_pixel(target_x as u32, target_y as u32);
@@ -1237,13 +1213,16 @@ fn generate_luminance_bitmap(
     }
 
     apply_grow_and_feather(&mut mask, params.grow, params.feather, width, height);
-    Some(mask)
+    Ok(Some(mask))
 }
 
 fn generate_all_bitmap(width: u32, height: u32) -> GrayImage {
     GrayImage::from_pixel(width, height, Luma([255]))
 }
 
+/// The sub-mask's bitmap; None if it's hidden or not set up yet (an AI mask the
+/// model hasn't made, a colour or luminance mask with no pixel picked). Err if its
+/// parameters can't be used.
 fn generate_sub_mask_bitmap(
     sub_mask: &SubMask,
     width: u32,
@@ -1251,74 +1230,38 @@ fn generate_sub_mask_bitmap(
     scale: f32,
     crop_offset: (f32, f32),
     warped_image: Option<&DynamicImage>,
-) -> Option<GrayImage> {
+) -> Result<Option<GrayImage>, String> {
     if !sub_mask.visible {
-        return None;
+        return Ok(None);
     }
 
+    let params = &sub_mask.parameters;
     match sub_mask.mask_type.as_str() {
-        "radial" => Some(generate_radial_bitmap(
-            &sub_mask.parameters,
-            width,
-            height,
-            scale,
-            crop_offset,
-        )),
-        "linear" => Some(generate_linear_bitmap(
-            &sub_mask.parameters,
-            width,
-            height,
-            scale,
-            crop_offset,
-        )),
-        "brush" | "clone" | "heal" | "liquify" | "retouch" => Some(generate_brush_bitmap(
-            &sub_mask.parameters,
-            width,
-            height,
-            scale,
-            crop_offset,
-        )),
-        "flow" => Some(generate_flow_bitmap(
-            &sub_mask.parameters,
-            width,
-            height,
-            scale,
-            crop_offset,
-        )),
-        "color" => generate_color_bitmap(
-            &sub_mask.parameters,
-            width,
-            height,
-            scale,
-            crop_offset,
-            warped_image,
-        ),
-        "luminance" => generate_luminance_bitmap(
-            &sub_mask.parameters,
-            width,
-            height,
-            scale,
-            crop_offset,
-            warped_image,
-        ),
-        "ai-subject" => {
-            generate_ai_subject_bitmap(&sub_mask.parameters, width, height, scale, crop_offset)
+        "radial" => generate_radial_bitmap(params, width, height, scale, crop_offset).map(Some),
+        "linear" => generate_linear_bitmap(params, width, height, scale, crop_offset).map(Some),
+        "brush" | "clone" | "heal" | "liquify" | "retouch" => {
+            generate_brush_bitmap(params, width, height, scale, crop_offset).map(Some)
         }
-        "ai-foreground" => {
-            generate_ai_foreground_bitmap(&sub_mask.parameters, width, height, scale, crop_offset)
+        "flow" => generate_flow_bitmap(params, width, height, scale, crop_offset).map(Some),
+        "color" => {
+            generate_color_bitmap(params, width, height, scale, crop_offset, warped_image)
         }
-        "ai-sky" => generate_ai_sky_bitmap(&sub_mask.parameters, width, height, scale, crop_offset),
-        "ai-depth" => {
-            generate_ai_depth_bitmap(&sub_mask.parameters, width, height, scale, crop_offset)
+        "luminance" => {
+            generate_luminance_bitmap(params, width, height, scale, crop_offset, warped_image)
         }
-        "quick-eraser" => {
-            generate_ai_subject_bitmap(&sub_mask.parameters, width, height, scale, crop_offset)
+        "ai-subject" | "ai-foreground" | "ai-sky" | "quick-eraser" => {
+            generate_ai_bitmap(params, width, height, scale, crop_offset)
         }
-        "all" => Some(generate_all_bitmap(width, height)),
-        _ => None,
+        "ai-depth" => generate_ai_depth_bitmap(params, width, height, scale, crop_offset),
+        "all" => Ok(Some(generate_all_bitmap(width, height))),
+        other => Err(format!("unknown sub-mask type '{other}'")),
     }
 }
 
+/// The mask's bitmap, or None if the mask is hidden. Every visible mask gets one,
+/// even if it selects nothing, so the bitmaps stay paired with the mask
+/// adjustments, which skip only hidden masks. A sub-mask that can't be built is
+/// logged and left out.
 pub fn generate_mask_bitmap(
     mask_def: &MaskDefinition,
     width: u32,
@@ -1327,47 +1270,92 @@ pub fn generate_mask_bitmap(
     crop_offset: (f32, f32),
     warped_image: Option<&DynamicImage>,
 ) -> Option<GrayImage> {
-    if !mask_def.visible || mask_def.sub_masks.is_empty() {
-        return None;
+    build_mask_bitmap(mask_def, width, height, scale, crop_offset, warped_image, false)
+        .unwrap_or_default()
+}
+
+/// generate_mask_bitmap for the dev harness: a sub-mask that can't be built is an error.
+pub fn generate_mask_bitmap_strict(
+    mask_def: &MaskDefinition,
+    width: u32,
+    height: u32,
+    scale: f32,
+    crop_offset: (f32, f32),
+    warped_image: Option<&DynamicImage>,
+) -> Result<Option<GrayImage>, String> {
+    build_mask_bitmap(mask_def, width, height, scale, crop_offset, warped_image, true)
+}
+
+fn build_mask_bitmap(
+    mask_def: &MaskDefinition,
+    width: u32,
+    height: u32,
+    scale: f32,
+    crop_offset: (f32, f32),
+    warped_image: Option<&DynamicImage>,
+    strict: bool,
+) -> Result<Option<GrayImage>, String> {
+    if !mask_def.visible {
+        return Ok(None);
     }
 
     let mut final_mask = GrayImage::new(width, height);
+    if mask_def.sub_masks.is_empty() {
+        // Nothing added yet (or the last part deleted): selects nothing, inverted or not.
+        return Ok(Some(final_mask));
+    }
 
     for sub_mask in &mask_def.sub_masks {
-        if let Some(mut sub_bitmap) =
-            generate_sub_mask_bitmap(sub_mask, width, height, scale, crop_offset, warped_image)
-        {
-            if sub_mask.invert {
-                for p in sub_bitmap.pixels_mut() {
-                    p[0] = 255 - p[0];
+        let mut sub_bitmap = match generate_sub_mask_bitmap(
+            sub_mask,
+            width,
+            height,
+            scale,
+            crop_offset,
+            warped_image,
+        ) {
+            Ok(Some(bitmap)) => bitmap,
+            Ok(None) => continue,
+            Err(e) => {
+                let e = format!("mask '{}', {} sub-mask: {e}", mask_def.name, sub_mask.mask_type);
+                if strict {
+                    return Err(e);
+                }
+                log::error!("{e}; left out");
+                continue;
+            }
+        };
+
+        if sub_mask.invert {
+            for p in sub_bitmap.pixels_mut() {
+                p[0] = 255 - p[0];
+            }
+        }
+
+        let opacity_multiplier = (sub_mask.opacity / 100.0).clamp(0.0, 1.0);
+        if opacity_multiplier < 1.0 {
+            for pixel in sub_bitmap.pixels_mut() {
+                pixel[0] = (pixel[0] as f32 * opacity_multiplier) as u8;
+            }
+        }
+
+        match sub_mask.mode {
+            SubMaskMode::Additive => {
+                for (x, y, pixel) in final_mask.enumerate_pixels_mut() {
+                    let sub_pixel = sub_bitmap.get_pixel(x, y);
+                    pixel[0] = pixel[0].max(sub_pixel[0]);
                 }
             }
-
-            let opacity_multiplier = (sub_mask.opacity / 100.0).clamp(0.0, 1.0);
-            if opacity_multiplier < 1.0 {
-                for pixel in sub_bitmap.pixels_mut() {
-                    pixel[0] = (pixel[0] as f32 * opacity_multiplier) as u8;
+            SubMaskMode::Subtractive => {
+                for (x, y, pixel) in final_mask.enumerate_pixels_mut() {
+                    let sub_pixel = sub_bitmap.get_pixel(x, y);
+                    pixel[0] = pixel[0].saturating_sub(sub_pixel[0]);
                 }
             }
-
-            match sub_mask.mode {
-                SubMaskMode::Additive => {
-                    for (x, y, pixel) in final_mask.enumerate_pixels_mut() {
-                        let sub_pixel = sub_bitmap.get_pixel(x, y);
-                        pixel[0] = pixel[0].max(sub_pixel[0]);
-                    }
-                }
-                SubMaskMode::Subtractive => {
-                    for (x, y, pixel) in final_mask.enumerate_pixels_mut() {
-                        let sub_pixel = sub_bitmap.get_pixel(x, y);
-                        pixel[0] = pixel[0].saturating_sub(sub_pixel[0]);
-                    }
-                }
-                SubMaskMode::Intersect => {
-                    for (x, y, pixel) in final_mask.enumerate_pixels_mut() {
-                        let sub_pixel = sub_bitmap.get_pixel(x, y);
-                        pixel[0] = pixel[0].min(sub_pixel[0]);
-                    }
+            SubMaskMode::Intersect => {
+                for (x, y, pixel) in final_mask.enumerate_pixels_mut() {
+                    let sub_pixel = sub_bitmap.get_pixel(x, y);
+                    pixel[0] = pixel[0].min(sub_pixel[0]);
                 }
             }
         }
@@ -1386,7 +1374,7 @@ pub fn generate_mask_bitmap(
         }
     }
 
-    Some(final_mask)
+    Ok(Some(final_mask))
 }
 
 #[tauri::command]
@@ -1549,4 +1537,64 @@ pub fn get_cached_or_generate_mask(
     }
 
     generated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // The GPU pairs mask bitmaps with mask adjustments by position. Deleting a
+    // mask's last part used to drop its bitmap but keep its adjustments, so the
+    // next mask got them.
+    #[test]
+    fn every_visible_mask_gets_a_bitmap_paired_with_its_adjustments() {
+        let radial = json!({"centerX": 5, "centerY": 5, "radiusX": 3, "radiusY": 3,
+                            "rotation": 0, "feather": 0});
+        let adjustments = json!({"masks": [
+            {"id": "a", "name": "emptied", "visible": true, "invert": true,
+             "adjustments": {}, "subMasks": []},
+            {"id": "b", "name": "broken", "visible": true},
+            {"id": "c", "name": "radial", "visible": true, "invert": false, "adjustments": {},
+             "subMasks": [{"id": "c1", "type": "radial", "visible": true, "mode": "additive",
+                           "parameters": radial}]},
+        ]});
+
+        let masks = parse_masks(&adjustments);
+        let names: Vec<_> = masks.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["emptied", "radial"]);
+
+        let bitmaps: Vec<_> = masks
+            .iter()
+            .filter_map(|m| generate_mask_bitmap(m, 10, 10, 1.0, (0.0, 0.0), None))
+            .collect();
+        let all = crate::image_processing::get_all_adjustments_from_json(
+            &adjustments,
+            true,
+            crate::white_balance::WhiteBalance::reference(),
+            None,
+        );
+        assert_eq!(bitmaps.len(), all.mask_count as usize);
+        assert!(bitmaps[0].pixels().all(|p| p[0] == 0));
+        assert_eq!(bitmaps[1].get_pixel(5, 5)[0], 255);
+    }
+
+    // The editor stores -10000 until a pixel is picked: no mask yet, not an error.
+    #[test]
+    fn unpicked_colour_and_luminance_masks_select_nothing() {
+        let unpicked = json!({"targetX": -10000, "targetY": -10000, "tolerance": 20});
+        let mask: MaskDefinition = serde_json::from_value(json!({
+            "id": "m", "name": "picker", "visible": true, "invert": false, "adjustments": {},
+            "subMasks": [
+                {"id": "c", "type": "color", "visible": true, "mode": "additive",
+                 "parameters": unpicked},
+                {"id": "l", "type": "luminance", "visible": true, "mode": "additive",
+                 "parameters": unpicked},
+            ]
+        }))
+        .unwrap();
+        let image = DynamicImage::new_rgb32f(10, 10);
+        let bitmap = generate_mask_bitmap_strict(&mask, 10, 10, 1.0, (0.0, 0.0), Some(&image));
+        assert!(bitmap.unwrap().unwrap().pixels().all(|p| p[0] == 0));
+    }
 }

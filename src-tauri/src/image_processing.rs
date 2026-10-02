@@ -19,7 +19,7 @@ pub use crate::gpu_processing::{
     RenderOutputPrecision, RenderRequest, get_or_init_gpu_context, process_and_get_dynamic_image,
     process_and_get_dynamic_image_with_analytics, process_and_get_dynamic_image_with_precision,
 };
-use crate::{AppState, mask_generation::MaskDefinition};
+use crate::{AppState, mask_generation::parse_masks};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 pub trait IntoCowImage<'a> {
@@ -2627,14 +2627,11 @@ pub fn get_all_adjustments_from_json(
     let mut mask_adjustments = [MaskAdjustments::default(); MAX_MASKS];
     let mut mask_count = 0;
 
-    let mask_definitions: Vec<MaskDefinition> = js_adjustments
-        .get("masks")
-        .and_then(|m| serde_json::from_value(m.clone()).ok())
-        .unwrap_or_default();
+    let mask_definitions = parse_masks(js_adjustments);
 
     for (i, mask_def) in mask_definitions
         .iter()
-        .filter(|m| m.visible && !m.sub_masks.is_empty())
+        .filter(|m| m.visible)
         .enumerate()
         .take(MAX_MASKS)
     {

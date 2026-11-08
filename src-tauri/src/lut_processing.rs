@@ -670,17 +670,14 @@ pub async fn generate_lut_previews(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         let context = crate::image_processing::get_or_init_gpu_context(&state, &app_handle)?;
-        let loaded_image = state
-            .original_image
-            .lock()
-            .unwrap()
-            .clone()
+        let photo = state
+            .photo()
             .ok_or("No original image loaded for LUT previews")?;
+        let loaded_image = &photo.loaded;
         let is_raw = loaded_image.is_raw;
 
         let base_json = serde_json::json!({});
-        let preview =
-            crate::prepare_preview_source(&state, &context, &loaded_image, &base_json, size)?;
+        let preview = crate::prepare_preview_source(&photo, &context, &base_json, size)?;
         let source = preview.render_source(&base_json);
 
         let render = resolve_render_options_from_handle(&app_handle, is_raw);

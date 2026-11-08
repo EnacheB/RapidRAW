@@ -2019,10 +2019,8 @@ pub(crate) async fn export_images_impl(
 
                     let loaded_image = if is_current_edit {
                         state
-                            .original_image
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .clone()
+                            .photo()
+                            .map(|photo| photo.loaded.clone())
                             .filter(|loaded| {
                                 parse_virtual_path(&loaded.path).0
                                     == parse_virtual_path(&source_path_str).0
@@ -2474,14 +2472,11 @@ pub async fn estimate_export_sizes(
 
     let current_edit = match current_edit_adjustments {
         Some(adjustments) if Some(first_path) == current_edit_path.as_ref() => {
-            let loaded_image = state
-                .original_image
-                .lock()
-                .unwrap()
-                .clone()
-                .filter(|image| image.path == *first_path);
-            match loaded_image {
-                Some(loaded_image) => Some((loaded_image, adjustments)),
+            let photo = state
+                .photo()
+                .filter(|photo| photo.loaded.path == *first_path);
+            match photo {
+                Some(photo) => Some((photo, adjustments)),
                 None => return Ok(None),
             }
         }
@@ -2492,15 +2487,16 @@ pub async fn estimate_export_sizes(
     let is_raw = is_raw_file(&source_path_str);
     let settings = load_settings(app_handle.clone()).unwrap_or_default();
 
-    let single_image_extrapolated_size: usize = if let Some((loaded_image, mut adjustments_clone)) =
+    let single_image_extrapolated_size: usize = if let Some((photo, mut adjustments_clone)) =
         current_edit
     {
+        let loaded_image = &photo.loaded;
         hydrate_adjustments(&state, &mut adjustments_clone);
 
         const ESTIMATE_DIM: u32 = 1920;
 
         let new_transform_hash = calculate_transform_hash(&adjustments_clone);
-        let cached_preview_lock = state.cached_preview.lock().unwrap();
+        let cached_preview_lock = photo.editor_preview.lock().unwrap();
         let cached = cached_preview_lock
             .as_ref()
             .filter(|c| c.transform_hash == new_transform_hash)
@@ -2508,13 +2504,7 @@ pub async fn estimate_export_sizes(
         drop(cached_preview_lock);
         let preview = match cached {
             Some(preview) => preview,
-            None => prepare_preview_source(
-                &state,
-                &context,
-                &loaded_image,
-                &adjustments_clone,
-                ESTIMATE_DIM,
-            )?,
+            None => prepare_preview_source(&photo, &context, &adjustments_clone, ESTIMATE_DIM)?,
         };
         let unscaled_crop_offset = preview.unscaled_crop_offset;
         let mut source = preview.render_source(&adjustments_clone);

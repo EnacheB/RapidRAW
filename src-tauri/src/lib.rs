@@ -248,15 +248,15 @@ fn get_or_compute_stage<T>(
 }
 
 pub fn prepare_preview_source(
-    state: &tauri::State<AppState>,
+    photo: &PhotoSession,
     context: &GpuContext,
-    loaded_image: &LoadedImage,
     adjustments: &serde_json::Value,
     preview_dim: u32,
 ) -> Result<PreviewSource, String> {
+    let loaded_image = &photo.loaded;
     let patched_key = patched_cache_key(&loaded_image.path, adjustments);
 
-    let patched = get_or_compute_stage(&state.patched_cache, patched_key, || {
+    let patched = get_or_compute_stage(&photo.patched, patched_key, || {
         compute_patched(loaded_image, adjustments)
     })?;
 
@@ -304,16 +304,13 @@ pub fn prepare_preview_source(
         patched_key.hash(&mut hasher);
         (working_w, working_h).hash(&mut hasher);
 
-        get_or_compute_stage(&state.working_cache, hasher.finish(), || {
+        get_or_compute_stage(&photo.working, hasher.finish(), || {
             Ok(Arc::new(downscale_f32_image(
                 &patched, working_w, working_h,
             )))
         })?
     } else {
-        *state
-            .working_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
+        *photo.working.lock().unwrap_or_else(|e| e.into_inner()) = None;
         Arc::clone(&patched)
     };
     drop(patched);
@@ -367,20 +364,13 @@ pub fn cached_patched_image(
     base_image: &DynamicImage,
     adjustments: &serde_json::Value,
 ) -> Option<Arc<DynamicImage>> {
-    let loaded_image = state
-        .original_image
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()?;
-    if !std::ptr::eq(&*loaded_image.image, base_image) {
+    let photo = state.photo()?;
+    if !std::ptr::eq(&*photo.loaded.image, base_image) {
         return None;
     }
 
-    let key = patched_cache_key(&loaded_image.path, adjustments);
-    let cache = state
-        .patched_cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let key = patched_cache_key(&photo.loaded.path, adjustments);
+    let cache = photo.patched.lock().unwrap_or_else(|e| e.into_inner());
     match cache.as_ref() {
         Some((hash, image)) if *hash == key => Some(Arc::clone(image)),
         _ => None,
@@ -456,12 +446,8 @@ pub fn get_cached_full_warped_image_for_path(
     path: Option<&str>,
     js_adjustments: &serde_json::Value,
 ) -> Result<Arc<DynamicImage>, String> {
-    let loaded_image = state
-        .original_image
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
-        .ok_or("No original image loaded")?;
+    let photo = state.photo().ok_or("No original image loaded")?;
+    let loaded_image = &photo.loaded;
 
     if let Some(path) = path
         && parse_virtual_path(path).0 != parse_virtual_path(&loaded_image.path).0
@@ -475,10 +461,7 @@ pub fn get_cached_full_warped_image_for_path(
     let cache_key = hasher.finish();
 
     let cached = || {
-        let mut cache_lock = state
-            .full_warped_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut cache_lock = photo.full_warped.lock().unwrap_or_else(|e| e.into_inner());
         match cache_lock.as_ref() {
             Some((hash, img)) if *hash == cache_key => Some(Arc::clone(img)),
             _ => {
@@ -493,7 +476,7 @@ pub fn get_cached_full_warped_image_for_path(
     }
 
     let _build_guard = rayon::current_thread_index().is_none().then(|| {
-        state
+        photo
             .full_warped_build_lock
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -508,10 +491,8 @@ pub fn get_cached_full_warped_image_for_path(
         &loaded_image.path,
         js_adjustments,
     ));
-    *state
-        .full_warped_cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = Some((cache_key, Arc::clone(&warped_arc)));
+    *photo.full_warped.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some((cache_key, Arc::clone(&warped_arc)));
 
     Ok(warped_arc)
 }
@@ -612,7 +593,7 @@ impl EditorRender {
         scale: f32,
         unscaled_crop_offset: (f32, f32),
         render: image_processing::RenderOptions,
-        image_generation: usize,
+        photo_id: usize,
     ) -> Self {
         let mask_definitions: Vec<MaskDefinition> = adjustments
             .get("masks")
@@ -640,7 +621,7 @@ impl EditorRender {
                 loaded_image.as_shot,
                 render,
             ),
-            mask_cache_key: masks.cache_key ^ image_generation as u64,
+            mask_cache_key: masks.cache_key ^ photo_id as u64,
             masks,
             lut: adjustments["lutPath"]
                 .as_str()
@@ -679,18 +660,14 @@ async fn sample_hsl_mixer_area(
     tokio::task::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         let context = get_or_init_gpu_context(&state, &app_handle)?;
-        let loaded_image = state
-            .original_image
-            .lock()
-            .unwrap()
-            .clone()
-            .ok_or("No original image loaded")?;
+        let photo = state.photo().ok_or("No original image loaded")?;
+        let loaded_image = &photo.loaded;
         let mut adjustments = js_adjustments;
         hydrate_adjustments(&state, &mut adjustments);
 
         let transform_hash = calculate_transform_hash(&adjustments);
-        let preview = state
-            .cached_preview_for(PreviewTarget::Editor)
+        let preview = photo
+            .editor_preview
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
@@ -708,13 +685,13 @@ async fn sample_hsl_mixer_area(
 
         let editor_render = EditorRender::prepare(
             &state,
-            &loaded_image,
+            loaded_image,
             &adjustments,
             (width, height),
             preview.scale,
             preview.unscaled_crop_offset,
             resolve_render_options_from_handle(&app_handle, loaded_image.is_raw),
-            state.load_image_generation.load(Ordering::SeqCst),
+            photo.id,
         );
         let roi = gpu_processing::Roi {
             x: x0,
@@ -752,13 +729,8 @@ fn process_preview_job(
     let fn_start = std::time::Instant::now();
     let context = get_or_init_gpu_context(&state, app_handle)?;
 
-    let image_generation = state.load_image_generation.load(Ordering::SeqCst);
-    let loaded_image_guard = state.original_image.lock().unwrap();
-    let loaded_image = loaded_image_guard
-        .as_ref()
-        .ok_or("No original image loaded")?
-        .clone();
-    drop(loaded_image_guard);
+    let photo = state.photo().ok_or("No original image loaded")?;
+    let loaded_image = &photo.loaded;
 
     let settings = load_settings(app_handle.clone()).unwrap_or_default();
     let is_raw = loaded_image.is_raw;
@@ -782,7 +754,7 @@ fn process_preview_job(
     hydrate_adjustments(&state, &mut adjustments_json);
     let adjustments_clone = adjustments_json;
 
-    crate::ai_denoise::ensure_generated(app_handle, &loaded_image, &adjustments_clone);
+    crate::ai_denoise::ensure_generated(app_handle, loaded_image, &adjustments_clone);
 
     let new_transform_hash = calculate_transform_hash(&adjustments_clone);
     let live_quality = settings.live_preview_quality.as_deref().unwrap_or("high");
@@ -802,8 +774,8 @@ fn process_preview_job(
     };
     let small_preview_dim = (preview_dim as f32 / interactive_divisor) as u32;
 
-    let mut cached_preview_lock = state
-        .cached_preview_for(target)
+    let mut cached_preview_lock = photo
+        .preview(target)
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
@@ -821,13 +793,8 @@ fn process_preview_job(
             {
                 cache.entries.clear();
             }
-            let preview = prepare_preview_source(
-                &state,
-                &context,
-                &loaded_image,
-                &adjustments_clone,
-                preview_dim,
-            )?;
+            let preview =
+                prepare_preview_source(&photo, &context, &adjustments_clone, preview_dim)?;
             *cached_preview_lock = Some(CachedPreview {
                 preview: preview.clone(),
                 transform_hash: new_transform_hash,
@@ -892,13 +859,13 @@ fn process_preview_job(
 
     let editor_render = EditorRender::prepare(
         &state,
-        &loaded_image,
+        loaded_image,
         &adjustments_clone,
         (preview_width, preview_height),
         effective_scale,
         unscaled_crop_offset,
         render,
-        image_generation,
+        photo.id,
     );
 
     let wants_analytics = !(is_interactive && pixel_roi.is_some()) && request_analytics;
@@ -977,8 +944,8 @@ fn process_preview_job(
             }
             if state
                 .wgpu_presented_generation
-                .swap(image_generation, Ordering::SeqCst)
-                != image_generation
+                .swap(photo.id, Ordering::SeqCst)
+                != photo.id
             {
                 let _ = context.device.poll(wgpu::PollType::Wait {
                     submission_index: None,
@@ -1128,15 +1095,7 @@ fn run_editor_job(app_handle: &tauri::AppHandle, job: PreviewJob) {
     let responder = job.responder;
     let rendered_source = (job.layer == DisplayLayer::Edited
         && state.image_preloader.is_awaiting_frame())
-    .then(|| {
-        let generation = state.load_image_generation.load(Ordering::SeqCst);
-        state
-            .original_image
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-            .map(|loaded| (generation, loaded.path.clone()))
-    })
+    .then(|| state.photo())
     .flatten();
     let result = catch_render_panic(|| {
         process_preview_job(
@@ -1157,10 +1116,10 @@ fn run_editor_job(app_handle: &tauri::AppHandle, job: PreviewJob) {
         Ok(bytes) => {
             let _ = responder.send(bytes);
             let state = app_handle.state::<AppState>();
-            if let Some((generation, path)) = rendered_source
-                && state.load_image_generation.load(Ordering::SeqCst) == generation
+            if let Some(rendered) = rendered_source
+                && state.photo().is_some_and(|photo| photo.id == rendered.id)
             {
-                state.image_preloader.frame_rendered(&path);
+                state.image_preloader.frame_rendered(&rendered.loaded.path);
             }
             if job.layer == DisplayLayer::Edited && !job.is_interactive {
                 viewer_window::schedule_viewer_render(app_handle);
@@ -1295,15 +1254,11 @@ async fn generate_uncropped_preview(
     let mut adjustments_clone = js_adjustments.clone();
     hydrate_adjustments(&state, &mut adjustments_clone);
 
-    let loaded_image = state
-        .original_image
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("No original image loaded")?;
+    let photo = state.photo().ok_or("No original image loaded")?;
 
     tokio::task::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
+        let loaded_image = &photo.loaded;
         let path = loaded_image.path.clone();
         let is_raw = loaded_image.is_raw;
         let settings = load_settings(app_handle.clone()).unwrap_or_default();
@@ -1320,8 +1275,8 @@ async fn generate_uncropped_preview(
         target_dim.hash(&mut hasher);
         let source_key = hasher.finish();
 
-        let cached_source = state
-            .uncropped_source_cache
+        let cached_source = photo
+            .uncropped_sources
             .lock()
             .unwrap()
             .get(&source_key)
@@ -1329,13 +1284,13 @@ async fn generate_uncropped_preview(
         let source_image = match cached_source {
             Some(cached) => cached,
             None => {
-                let patched = get_or_compute_stage(&state.patched_cache, patched_key, || {
-                    compute_patched(&loaded_image, &adjustments_clone)
+                let patched = get_or_compute_stage(&photo.patched, patched_key, || {
+                    compute_patched(loaded_image, &adjustments_clone)
                 })?;
                 let downscaled = Arc::new(downscale_f32_image(&patched, target_dim, target_dim));
                 drop(patched);
 
-                let mut cache = state.uncropped_source_cache.lock().unwrap();
+                let mut cache = photo.uncropped_sources.lock().unwrap();
                 if cache.len() > 2 {
                     cache.clear();
                 }
@@ -1435,10 +1390,8 @@ async fn generate_uncropped_preview(
 pub fn get_original_image(
     state: &tauri::State<AppState>,
 ) -> Result<(std::sync::Arc<image::DynamicImage>, bool), String> {
-    let original_image_lock = state.original_image.lock().unwrap();
-    let loaded_image = original_image_lock
-        .as_ref()
-        .ok_or("No original image loaded")?;
+    let photo = state.photo().ok_or("No original image loaded")?;
+    let loaded_image = &photo.loaded;
     Ok((
         std::sync::Arc::clone(&loaded_image.image),
         loaded_image.is_raw,
@@ -1454,12 +1407,10 @@ async fn generate_preset_preview(
         let state = app_handle.state::<AppState>();
         let context = get_or_init_gpu_context(&state, &app_handle)?;
 
-        let loaded_image = state
-            .original_image
-            .lock()
-            .unwrap()
-            .clone()
+        let photo = state
+            .photo()
             .ok_or("No original image loaded for preset preview")?;
+        let loaded_image = &photo.loaded;
         let is_raw = loaded_image.is_raw;
 
         let mut js_adjustments = js_adjustments;
@@ -1474,13 +1425,8 @@ async fn generate_preset_preview(
 
         const PRESET_PREVIEW_DIM: u32 = 400;
 
-        let preview = prepare_preview_source(
-            &state,
-            &context,
-            &loaded_image,
-            &js_adjustments,
-            PRESET_PREVIEW_DIM,
-        )?;
+        let preview =
+            prepare_preview_source(&photo, &context, &js_adjustments, PRESET_PREVIEW_DIM)?;
         let source = preview.render_source(&js_adjustments);
         let (scale_for_gpu, unscaled_crop_offset) = (preview.scale, preview.unscaled_crop_offset);
         let (img_w, img_h) = source.size();
@@ -2772,9 +2718,7 @@ pub fn run() {
         .manage(AppState {
             window_setup_complete: AtomicBool::new(false),
             gpu_crash_flag_path: Mutex::new(None),
-            original_image: Mutex::new(None),
-            cached_preview: Mutex::new(None),
-            viewer_cached_preview: Mutex::new(None),
+            photo: Mutex::new(None),
             gpu_context: Mutex::new(None),
             gpu_image_cache: Mutex::new(None),
             viewer_gpu_image_cache: Mutex::new(None),
@@ -2797,15 +2741,9 @@ pub fn run() {
             analytics_channel: Mutex::new(None),
             mask_cache: Mutex::new(HashMap::new()),
             patch_cache: Mutex::new(HashMap::new()),
-            uncropped_source_cache: Mutex::new(HashMap::new()),
             thumbnail_source_cache: Mutex::new(HashMap::new()),
             load_image_generation: Arc::new(AtomicUsize::new(0)),
-            full_warped_cache: Mutex::new(None),
-            full_warped_build_lock: Mutex::new(()),
             wgpu_presented_generation: AtomicUsize::new(usize::MAX),
-            patched_cache: Mutex::new(None),
-            cleanup_source_cache: Mutex::new(None),
-            working_cache: Mutex::new(None),
             decoded_image_cache: Mutex::new(DecodedImageCache::new(5)),
             decode_flights: Default::default(),
             image_preloader: Default::default(),
@@ -2851,7 +2789,6 @@ pub fn run() {
             viewer_window::get_viewer_frame,
             sample_hsl_mixer_area,
             android_integration::resolve_android_content_uri_name,
-            cache_utils::clear_session_caches,
             cache_utils::clear_image_caches,
             app_settings::load_settings,
             app_settings::save_settings,

@@ -141,8 +141,7 @@ pub fn ai_cache_key(path: &str, adjustments: &serde_json::Value) -> String {
 }
 
 fn loaded_source_id(state: &tauri::State<'_, AppState>) -> Option<String> {
-    let loaded = state.original_image.lock().unwrap().clone()?;
-    crate::ai_jobs::source_id_for(&loaded.path)
+    crate::ai_jobs::source_id_for(&state.photo()?.loaded.path)
 }
 
 fn check_cancelled(guard: &Option<AiTaskGuard>) -> Result<(), String> {
@@ -1004,10 +1003,8 @@ pub async fn get_depth_preview(
 
 fn get_loaded_image(state: &tauri::State<'_, AppState>) -> Result<crate::LoadedImage, String> {
     state
-        .original_image
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
+        .photo()
+        .map(|photo| photo.loaded.clone())
         .ok_or_else(|| "No original image loaded".to_string())
 }
 

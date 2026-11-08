@@ -1111,23 +1111,16 @@ pub async fn load_image(
     let source_path_str = source_path.to_string_lossy().to_string();
     let _preload_guard = state.image_preloader.begin_load(&source_path_str);
 
-    let my_generation = state.load_image_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let my_generation = state.begin_photo_load();
     let cancel_token = Some((state.load_image_generation.clone(), my_generation));
 
+    // Caches outside the photo session: GPU textures belong to the device, masks are
+    // shared with thumbnails and export, and the patch cache mirrors what the
+    // frontend has sent, which it forgets when a photo opens.
     {
-        *state
-            .original_image
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
         for target in PreviewTarget::ALL {
             clear_preview_slot(&state, target);
         }
-        *state
-            .full_warped_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
-        crate::cache_utils::clear_preview_stage_caches(&state);
-
         state
             .mask_cache
             .lock()
@@ -1135,11 +1128,6 @@ pub async fn load_image(
             .clear();
         state
             .patch_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
-        state
-            .uncropped_source_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
@@ -1175,15 +1163,7 @@ pub async fn load_image(
         .map_err(|e| e.to_string())??
     };
 
-    if state.load_image_generation.load(Ordering::SeqCst) != my_generation {
-        return Err("Load cancelled".to_string());
-    }
-
     let is_raw = is_raw_file(&source_path_str);
-
-    if state.load_image_generation.load(Ordering::SeqCst) != my_generation {
-        return Err("Load cancelled".to_string());
-    }
 
     let (orig_width, orig_height) = pristine_arc.dimensions();
     let as_shot = crate::as_shot::as_shot(&source_path_str);
@@ -1197,12 +1177,15 @@ pub async fn load_image(
         );
     }
 
-    *state.original_image.lock().unwrap() = Some(LoadedImage {
+    let loaded = LoadedImage {
         path: path.clone(),
         image: pristine_arc,
         is_raw,
         as_shot,
-    });
+    };
+    if !state.open_photo(my_generation, loaded) {
+        return Err("Load cancelled".to_string());
+    }
 
     crate::ai_jobs::prioritize(&app_handle, &path);
 

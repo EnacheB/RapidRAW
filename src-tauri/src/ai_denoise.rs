@@ -518,11 +518,8 @@ async fn generate(
     .map_err(|e| format!("AI denoise task failed: {}", e))??;
 
     let is_open = state
-        .original_image
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-        .is_some_and(|loaded| loaded.path == loaded_path);
+        .photo()
+        .is_some_and(|photo| photo.loaded.path == loaded_path);
     if !is_open {
         let thumbnail_handle = app_handle.clone();
         crate::file_management::add_to_thumbnail_queue(&state, 1, app_handle);

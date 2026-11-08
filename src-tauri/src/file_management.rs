@@ -2737,17 +2737,10 @@ pub fn save_metadata_and_update_thumbnail(
         sync_metadata_to_xmp(&source_path, &sidecar_path, &metadata, create_if_missing);
     }
 
-    let loaded_image_lock = state.original_image.lock().unwrap();
-    let preloaded_image_option = if let Some(loaded_image) = loaded_image_lock.as_ref() {
-        if loaded_image.path == path {
-            Some(loaded_image.image.clone())
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-    drop(loaded_image_lock);
+    let preloaded_image_option = state
+        .photo()
+        .filter(|photo| photo.loaded.path == path)
+        .map(|photo| photo.loaded.image.clone());
 
     let gpu_context = gpu_processing::get_or_init_gpu_context(&state, &app_handle).ok();
     let app_handle_clone = app_handle.clone();

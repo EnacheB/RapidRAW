@@ -119,12 +119,7 @@ pub fn pending_viewer_render(app_handle: &AppHandle) -> Option<(serde_json::Valu
         return None;
     }
     let state = app_handle.state::<AppState>();
-    let loaded_path = state
-        .original_image
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-        .map(|image| image.path.clone())?;
+    let loaded_path = state.photo()?.loaded.path.clone();
     let viewer = viewer_state(&state);
     let target = render_target(&viewer.session)?;
     let source = viewer

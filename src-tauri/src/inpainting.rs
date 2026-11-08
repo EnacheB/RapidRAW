@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::ai_connector;
 use crate::ai_processing;
 use crate::app_settings::load_settings;
-use crate::app_state::AppState;
+use crate::app_state::{AppState, LoadedImage};
 use crate::image_loader::prepare_base_image_cow;
 use crate::image_processing::{Crop, apply_linear_to_srgb};
 use crate::mask_generation::{AiPatchDefinition, MaskDefinition, SubMask, generate_mask_bitmap};
@@ -29,16 +29,10 @@ fn adjustments_without_patch(patch_id: &str, current_adjustments: &Value) -> Val
 fn prepare_source_image(
     patch_id: &str,
     current_adjustments: &Value,
-    state: &tauri::State<'_, AppState>,
+    loaded_image: &LoadedImage,
 ) -> Result<(DynamicImage, bool), String> {
     let source_image_adjustments = adjustments_without_patch(patch_id, current_adjustments);
 
-    let loaded_image = state
-        .original_image
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("No original image loaded")?;
     let is_raw = crate::negative_conversion::effective_is_raw(
         loaded_image.is_raw,
         &source_image_adjustments,
@@ -66,12 +60,8 @@ fn cached_source_image(
     current_adjustments: &Value,
     state: &tauri::State<'_, AppState>,
 ) -> Result<(Arc<RgbImage>, bool, String), String> {
-    let loaded_image = state
-        .original_image
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("No original image loaded")?;
+    let photo = state.photo().ok_or("No original image loaded")?;
+    let loaded_image = &photo.loaded;
     let is_raw =
         crate::negative_conversion::effective_is_raw(loaded_image.is_raw, current_adjustments);
     let key = crate::patched_cache_key(
@@ -79,11 +69,11 @@ fn cached_source_image(
         &adjustments_without_patch(patch_id, current_adjustments),
     );
 
-    let source_image = crate::get_or_compute_stage(&state.cleanup_source_cache, key, || {
-        prepare_source_image(patch_id, current_adjustments, state)
+    let source_image = crate::get_or_compute_stage(&photo.cleanup_source, key, || {
+        prepare_source_image(patch_id, current_adjustments, loaded_image)
             .map(|(image, _)| Arc::new(image.into_rgb8()))
     })?;
-    Ok((source_image, is_raw, loaded_image.path))
+    Ok((source_image, is_raw, loaded_image.path.clone()))
 }
 
 fn transformed_dimensions(img_w: u32, img_h: u32, adjustments: &Value) -> (u32, u32) {
@@ -482,8 +472,9 @@ pub async fn invoke_generative_replace_with_mask_def(
 
     let settings = load_settings(app_handle.clone()).unwrap_or_default();
 
+    let photo = state.photo().ok_or("No original image loaded")?;
     let (source_image, is_raw) =
-        prepare_source_image(&patch_definition.id, &current_adjustments, &state)?;
+        prepare_source_image(&patch_definition.id, &current_adjustments, &photo.loaded)?;
     let (img_w, img_h) = source_image.dimensions();
     let img_w_usize = img_w as usize;
     let img_h_usize = img_h as usize;

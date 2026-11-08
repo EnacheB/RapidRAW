@@ -754,30 +754,17 @@ impl DecodeFlights {
     }
 }
 
-pub fn clear_preview_stage_caches(state: &AppState) {
-    *state
-        .patched_cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = None;
-    *state
-        .cleanup_source_cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = None;
-    *state
-        .working_cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = None;
-}
-
 pub fn clear_preview_slot(state: &AppState, target: PreviewTarget) {
     *state
         .gpu_image_cache_for(target)
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = None;
-    *state
-        .cached_preview_for(target)
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = None;
+    if let Some(photo) = state.photo() {
+        *photo
+            .preview(target)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+    }
 }
 
 #[tauri::command]
@@ -788,21 +775,5 @@ pub fn clear_image_caches(state: tauri::State<AppState>) {
     for target in PreviewTarget::ALL {
         clear_preview_slot(&state, target);
     }
-    if let Ok(mut warped_cache) = state.full_warped_cache.lock() {
-        *warped_cache = None;
-    }
-    clear_preview_stage_caches(&state);
-}
-
-#[tauri::command]
-pub fn clear_session_caches(state: tauri::State<AppState>) {
-    if let Ok(mut patch_cache) = state.patch_cache.lock() {
-        patch_cache.clear();
-    }
-    if let Ok(mut mask_cache) = state.mask_cache.lock() {
-        mask_cache.clear();
-    }
-    if let Ok(mut uncropped_source_cache) = state.uncropped_source_cache.lock() {
-        uncropped_source_cache.clear();
-    }
+    state.clear_photo_caches();
 }

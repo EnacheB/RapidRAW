@@ -197,6 +197,51 @@ pub struct CachedPreview {
     pub preview_dim: u32,
 }
 
+/// A computed stage of the open photo, kept for the key it was computed for.
+pub type StageCache<T> = Mutex<Option<(u64, Arc<T>)>>;
+
+/// The photo open in the editor and every image derived from it. `load_image`
+/// installs a new session in one step. A job holds the `Arc` it started with, so
+/// whatever it caches lands in its own session and is dropped with it: a job still
+/// running for the previous photo can't write into the next one.
+pub struct PhotoSession {
+    /// The `load_image_generation` that opened this photo.
+    pub id: usize,
+    pub loaded: LoadedImage,
+    pub editor_preview: Mutex<Option<CachedPreview>>,
+    pub viewer_preview: Mutex<Option<CachedPreview>>,
+    pub patched: StageCache<DynamicImage>,
+    pub working: StageCache<DynamicImage>,
+    pub cleanup_source: StageCache<RgbImage>,
+    pub full_warped: StageCache<DynamicImage>,
+    pub full_warped_build_lock: Mutex<()>,
+    pub uncropped_sources: Mutex<HashMap<u64, Arc<DynamicImage>>>,
+}
+
+impl PhotoSession {
+    pub fn new(id: usize, loaded: LoadedImage) -> Self {
+        Self {
+            id,
+            loaded,
+            editor_preview: Mutex::new(None),
+            viewer_preview: Mutex::new(None),
+            patched: Mutex::new(None),
+            working: Mutex::new(None),
+            cleanup_source: Mutex::new(None),
+            full_warped: Mutex::new(None),
+            full_warped_build_lock: Mutex::new(()),
+            uncropped_sources: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn preview(&self, target: PreviewTarget) -> &Mutex<Option<CachedPreview>> {
+        match target {
+            PreviewTarget::Editor => &self.editor_preview,
+            PreviewTarget::Viewer => &self.viewer_preview,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct GpuImageCache {
     pub entries: Vec<GpuImageEntry>,
@@ -318,9 +363,7 @@ pub struct ThumbnailSource {
 pub struct AppState {
     pub window_setup_complete: AtomicBool,
     pub gpu_crash_flag_path: Mutex<Option<PathBuf>>,
-    pub original_image: Mutex<Option<LoadedImage>>,
-    pub cached_preview: Mutex<Option<CachedPreview>>,
-    pub viewer_cached_preview: Mutex<Option<CachedPreview>>,
+    pub photo: Mutex<Option<Arc<PhotoSession>>>,
     pub gpu_context: Mutex<Option<GpuContext>>,
     pub gpu_image_cache: Mutex<Option<GpuImageCache>>,
     pub viewer_gpu_image_cache: Mutex<Option<GpuImageCache>>,
@@ -343,15 +386,9 @@ pub struct AppState {
     pub analytics_channel: Mutex<Option<tauri::ipc::Channel>>,
     pub mask_cache: Mutex<HashMap<u64, GrayImage>>,
     pub patch_cache: Mutex<HashMap<String, serde_json::Value>>,
-    pub uncropped_source_cache: Mutex<HashMap<u64, Arc<DynamicImage>>>,
     pub thumbnail_source_cache: Mutex<HashMap<String, Arc<ThumbnailSource>>>,
     pub load_image_generation: Arc<AtomicUsize>,
     pub wgpu_presented_generation: AtomicUsize,
-    pub full_warped_cache: Mutex<Option<(u64, Arc<DynamicImage>)>>,
-    pub full_warped_build_lock: Mutex<()>,
-    pub patched_cache: Mutex<Option<(u64, Arc<DynamicImage>)>>,
-    pub cleanup_source_cache: Mutex<Option<(u64, Arc<RgbImage>)>>,
-    pub working_cache: Mutex<Option<(u64, Arc<DynamicImage>)>>,
     pub decoded_image_cache: Mutex<DecodedImageCache>,
     pub decode_flights: DecodeFlights,
     pub image_preloader: crate::image_preload::ImagePreloader,
@@ -365,10 +402,32 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn cached_preview_for(&self, target: PreviewTarget) -> &Mutex<Option<CachedPreview>> {
-        match target {
-            PreviewTarget::Editor => &self.cached_preview,
-            PreviewTarget::Viewer => &self.viewer_cached_preview,
+    pub fn photo(&self) -> Option<Arc<PhotoSession>> {
+        self.photo.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Closes the open photo and starts a new load; returns that load's generation.
+    pub fn begin_photo_load(&self) -> usize {
+        let mut photo = self.photo.lock().unwrap_or_else(|e| e.into_inner());
+        *photo = None;
+        self.load_image_generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// Opens `loaded` as the photo, unless a newer load has begun since `generation`.
+    pub fn open_photo(&self, generation: usize, loaded: LoadedImage) -> bool {
+        let mut photo = self.photo.lock().unwrap_or_else(|e| e.into_inner());
+        if self.load_image_generation.load(Ordering::SeqCst) != generation {
+            return false;
+        }
+        *photo = Some(Arc::new(PhotoSession::new(generation, loaded)));
+        true
+    }
+
+    /// Drops every image derived from the open photo, keeping the photo itself.
+    pub fn clear_photo_caches(&self) {
+        let mut photo = self.photo.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(open) = photo.as_ref() {
+            *photo = Some(Arc::new(PhotoSession::new(open.id, open.loaded.clone())));
         }
     }
 

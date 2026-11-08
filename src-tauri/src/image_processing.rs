@@ -4302,11 +4302,10 @@ pub fn calculate_auto_adjustments(
     app_handle: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let loaded_image = state
-        .original_image
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("No image loaded for auto adjustments")?;
+        .photo()
+        .ok_or("No image loaded for auto adjustments")?
+        .loaded
+        .clone();
 
     let render = resolve_render_options_from_handle(&app_handle, loaded_image.is_raw);
     let exposure =
@@ -4470,11 +4469,10 @@ pub async fn sample_white_balance(
     state: tauri::State<'_, AppState>,
 ) -> Result<WhiteBalanceSample, String> {
     let loaded_image = state
-        .original_image
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("No original image loaded")?;
+        .photo()
+        .ok_or("No original image loaded")?
+        .loaded
+        .clone();
     let adjustments = js_adjustments.unwrap_or_default();
     let converted = crate::negative_conversion::is_enabled(&adjustments)
         .then(|| crate::cached_patched_image(&state, &loaded_image.image, &adjustments))

@@ -821,11 +821,8 @@ fn decode_source(app_handle: &AppHandle, source_path: &Path) -> Result<Arc<Dynam
 fn open_image_path(app_handle: &AppHandle) -> Option<String> {
     app_handle
         .state::<AppState>()
-        .original_image
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-        .map(|loaded| loaded.path.clone())
+        .photo()
+        .map(|photo| photo.loaded.path.clone())
 }
 
 struct JobRun {

@@ -1667,7 +1667,15 @@ fn generate_thumbnail_data_with_metadata(
 
     let always_decode_raw = settings.always_decode_raw_thumbnails.unwrap_or(false);
 
-    if is_raw && adjustments.is_null() && preloaded_image.is_none() && !always_decode_raw {
+    // Having adjustments doesn't mean edited: XMP sync stores the rating there. Any
+    // crop renders, since is_image_edited can't tell a top-left crop from no crop.
+    let tm = crate::image_processing::resolve_tonemapper_override(settings, is_raw);
+    if is_raw
+        && preloaded_image.is_none()
+        && !always_decode_raw
+        && adjustments["crop"].is_null()
+        && !crate::image_processing::is_image_edited(adjustments, is_raw, tm)
+    {
         let target_res = settings.medium_thumbnail_resolution.unwrap_or(1280);
         if let Some(preview) = try_load_embedded_raw_preview(&source_path, target_res) {
             return Ok(preview);

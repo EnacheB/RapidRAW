@@ -37,8 +37,9 @@ interface BaseRenderSize extends ImageDimensions {
 
 export type WgpuPhase = 'hidden' | 'arming' | 'live';
 
-// Editor view state that changes the preview's pixels but is never saved (overlays on
-// the finished picture). Sent with every preview render; see ViewOptions in the backend.
+// How the editor is looking at the photo right now (e.g. the clipping overlay): never
+// saved, sent with every preview render. See ViewOptions in the backend for when
+// something belongs here rather than in the adjustments.
 export interface ViewOptions {
   showClipping: boolean;
 }

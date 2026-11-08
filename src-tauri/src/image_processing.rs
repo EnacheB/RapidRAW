@@ -2046,10 +2046,19 @@ pub struct RenderOptions {
     pub baseline: BaselineOptions,
 }
 
-/// Editor view state that changes the preview's pixels but is never saved: overlays
-/// painted over the finished picture. Changes to what gets rendered (preset hover,
-/// show original, compare) are a different recipe, not a view option. Only editor
-/// previews take these; render parameters built from adjustments leave them off.
+/// How the editor is looking at the photo right now, as opposed to the adjustments,
+/// which say what the photo is.
+///
+/// The adjustments are the photo's recipe: saved with it, undoable, copied by paste
+/// and presets, and rendered the same everywhere (editor, export, thumbnails). View
+/// options belong to the editor session: never saved, not part of undo, and applied
+/// only to editor previews, on top of whichever recipe is shown. Temporary recipes
+/// such as LUT hover or show original are not view options; the frontend swaps the
+/// whole recipe for those.
+///
+/// Rule of thumb: if an export of the photo should include it, it is an adjustment.
+/// If it only helps you inspect the picture (clipping warnings, and later things like
+/// focus peaking or a mask overlay), it is a view option.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewOptions {

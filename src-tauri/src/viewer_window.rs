@@ -114,7 +114,7 @@ fn render_target(session: &ViewerSession) -> Option<u32> {
     (!satisfied).then_some(target)
 }
 
-pub fn pending_viewer_render(app_handle: &AppHandle) -> Option<(serde_json::Value, u32)> {
+pub fn pending_viewer_render(app_handle: &AppHandle) -> Option<(serde_json::Value, bool, u32)> {
     if !viewer_is_open(app_handle) {
         return None;
     }
@@ -132,7 +132,11 @@ pub fn pending_viewer_render(app_handle: &AppHandle) -> Option<(serde_json::Valu
         .source
         .as_ref()
         .filter(|source| source.path == loaded_path)?;
-    Some((source.adjustments.clone(), target))
+    Some((
+        source.adjustments.clone(),
+        source.content.show_clipping,
+        target,
+    ))
 }
 
 pub fn schedule_viewer_render(app_handle: &AppHandle) {

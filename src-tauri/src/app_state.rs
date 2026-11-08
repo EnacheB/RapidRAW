@@ -118,6 +118,7 @@ pub struct FrameContent {
     pub job_hash: u64,
     pub patch_hash: u64,
     pub render: RenderOptions,
+    pub show_clipping: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -238,6 +239,7 @@ pub struct PreviewJob {
     pub request_analytics: bool,
     pub compute_waveform: bool,
     pub active_waveform_channel: Option<String>,
+    pub show_clipping: bool,
     pub responder: tokio::sync::oneshot::Sender<Vec<u8>>,
 }
 

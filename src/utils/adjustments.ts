@@ -391,7 +391,6 @@ export interface Adjustments {
   shadows: number;
   sharpness: number;
   sharpnessThreshold: number;
-  showClipping: boolean;
   structure: number;
   temperature: number;
   tint: number;

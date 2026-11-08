@@ -747,6 +747,7 @@ fn process_preview_job(
     request_analytics: bool,
     compute_waveform: bool,
     active_waveform_channel: Option<&str>,
+    show_clipping: bool,
     target: PreviewTarget,
 ) -> Result<Vec<u8>, String> {
     let fn_start = std::time::Instant::now();
@@ -767,6 +768,7 @@ fn process_preview_job(
         job_hash: calculate_full_job_hash(&loaded_image.path, &adjustments_json),
         patch_hash: calculate_patch_hash(&adjustments_json),
         render,
+        show_clipping,
     };
     let mirrors_editor = target == PreviewTarget::Editor && layer == DisplayLayer::Edited;
     if mirrors_editor {
@@ -890,7 +892,7 @@ fn process_preview_job(
         None
     };
 
-    let editor_render = EditorRender::prepare(
+    let mut editor_render = EditorRender::prepare(
         &state,
         &loaded_image,
         &adjustments_clone,
@@ -900,6 +902,7 @@ fn process_preview_job(
         render,
         image_generation,
     );
+    editor_render.adjustments.global.show_clipping = u32::from(show_clipping);
 
     let wants_analytics = !(is_interactive && pixel_roi.is_some()) && request_analytics;
     let channel_filter = if is_interactive {
@@ -1150,6 +1153,7 @@ fn run_editor_job(app_handle: &tauri::AppHandle, job: PreviewJob) {
             job.request_analytics,
             job.compute_waveform,
             job.active_waveform_channel.as_deref(),
+            job.show_clipping,
             PreviewTarget::Editor,
         )
     });
@@ -1173,7 +1177,8 @@ fn run_editor_job(app_handle: &tauri::AppHandle, job: PreviewJob) {
 }
 
 fn run_viewer_job(app_handle: &tauri::AppHandle) {
-    let Some((adjustments, target_resolution)) = viewer_window::pending_viewer_render(app_handle)
+    let Some((adjustments, show_clipping, target_resolution)) =
+        viewer_window::pending_viewer_render(app_handle)
     else {
         return;
     };
@@ -1189,6 +1194,7 @@ fn run_viewer_job(app_handle: &tauri::AppHandle) {
             false,
             false,
             None,
+            show_clipping,
             PreviewTarget::Viewer,
         )
     });
@@ -1248,6 +1254,7 @@ async fn apply_adjustments(
     request_analytics: bool,
     compute_waveform: bool,
     active_waveform_channel: Option<String>,
+    show_clipping: bool,
     state: tauri::State<'_, AppState>,
 ) -> Result<Response, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -1268,6 +1275,7 @@ async fn apply_adjustments(
                 request_analytics,
                 compute_waveform,
                 active_waveform_channel,
+                show_clipping,
                 responder: tx,
             };
             worker_tx
@@ -1388,9 +1396,8 @@ async fn generate_uncropped_preview(
         .bitmaps;
 
         let render = resolve_render_options_from_handle(&app_handle, is_raw);
-        let mut uncropped_adjustments =
+        let uncropped_adjustments =
             get_all_adjustments_from_json(&adjustments_clone, is_raw, loaded_image.as_shot, render);
-        uncropped_adjustments.global.show_clipping = 0;
         let lut_path = adjustments_clone["lutPath"].as_str();
         let lut = lut_path.and_then(|p| lut_processing::get_or_load_lut(&state, p).ok());
 
@@ -1508,9 +1515,8 @@ async fn generate_preset_preview(
         .bitmaps;
 
         let render = resolve_render_options_from_handle(&app_handle, is_raw);
-        let mut all_adjustments =
+        let all_adjustments =
             get_all_adjustments_from_json(&js_adjustments, is_raw, loaded_image.as_shot, render);
-        all_adjustments.global.show_clipping = 0;
         let lut_path = js_adjustments["lutPath"].as_str();
         let lut = lut_path.and_then(|p| lut_processing::get_or_load_lut(&state, p).ok());
 
@@ -2008,13 +2014,12 @@ async fn generate_preview_for_path(
             .collect();
 
         let render = resolve_render_options(&settings, is_raw);
-        let mut all_adjustments = get_all_adjustments_from_json(
+        let all_adjustments = get_all_adjustments_from_json(
             &js_adjustments,
             is_raw,
             crate::as_shot::as_shot(&source_path_str),
             render,
         );
-        all_adjustments.global.show_clipping = 0;
         let lut_path = js_adjustments["lutPath"].as_str();
         let lut = lut_path.and_then(|p| lut_processing::get_or_load_lut(&state, p).ok());
         let final_image = process_and_get_dynamic_image(

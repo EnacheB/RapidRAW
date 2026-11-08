@@ -1046,7 +1046,7 @@ export default function MasksPanel() {
               className="shrink-0 flex flex-col relative border-b border-surface overflow-hidden"
             >
               <div className="grow w-full h-full p-3 pb-2 min-h-0">
-                <ConnectedWaveform setDisplayMode={setActiveWaveformChannel} setAdjustments={setAdjustments} />
+                <ConnectedWaveform setDisplayMode={setActiveWaveformChannel} />
               </div>
               <Resizer direction={Orientation.Horizontal} onMouseDown={handleWaveformResize} />
             </motion.div>

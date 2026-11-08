@@ -49,6 +49,7 @@ export function useImageProcessing(
   const adjustments = useEditorStore((state) => state.adjustments);
   const previewOverride = useEditorStore((state) => state.previewOverride);
   const isWaveformVisible = useEditorStore((state) => state.isWaveformVisible);
+  const showClipping = useEditorStore((state) => state.showClipping);
   const activeWaveformChannel = useEditorStore((state) => state.activeWaveformChannel);
   const displaySize = useEditorStore((state) => state.displaySize);
   const baseRenderSize = useEditorStore((state) => state.baseRenderSize);
@@ -123,6 +124,7 @@ export function useImageProcessing(
           requestAnalytics: false,
           computeWaveform: false,
           activeWaveformChannel: null,
+          showClipping: false,
         });
         markSent();
 
@@ -160,6 +162,7 @@ export function useImageProcessing(
           requestAnalytics: true,
           computeWaveform: !!isWaveformVisible,
           activeWaveformChannel: activeWaveformChannelRef.current || null,
+          showClipping,
         });
         if (!dragging) renderOriginal(targetRes);
         const buffer = await request;
@@ -244,6 +247,7 @@ export function useImageProcessing(
       selectedImage?.path,
       calculateROI,
       isWaveformVisible,
+      showClipping,
       setEditor,
       previewJobIdRef,
       latestRenderedJobIdRef,
@@ -545,6 +549,7 @@ export function useImageProcessing(
     appSettings?.copyPasteSettings?.includedAdjustments,
     appSettings?.copyPasteSettings?.autoSync,
     isWaveformVisible,
+    showClipping,
   ]);
 
   return {

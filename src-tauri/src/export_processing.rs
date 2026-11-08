@@ -1171,9 +1171,8 @@ fn process_image_for_export_pipeline(
         .collect();
 
     let render = resolve_render_options_from_handle(app_handle, is_raw);
-    let mut all_adjustments =
+    let all_adjustments =
         get_all_adjustments_from_json(js_adjustments, is_raw, as_shot(path), render);
-    all_adjustments.global.show_clipping = 0;
 
     let lut_path = js_adjustments["lutPath"].as_str();
     let lut = lut_path.and_then(|p| get_or_load_lut(state, p).ok());
@@ -1655,7 +1654,6 @@ fn export_adjustments_as_lut(
     let mut all_adjustments =
         get_all_adjustments_from_json(js_adjustments, false, as_shot(source_path_str), render);
 
-    all_adjustments.global.show_clipping = 0;
     all_adjustments.global.vignette_amount = 0.0;
     all_adjustments.global.grain_amount = 0.0;
     all_adjustments.global.grain_softness = 0.0;
@@ -2545,9 +2543,8 @@ pub async fn estimate_export_sizes(
         .bitmaps;
 
         let render = resolve_render_options_from_handle(&app_handle, is_raw);
-        let mut all_adjustments =
+        let all_adjustments =
             get_all_adjustments_from_json(&adjustments_clone, is_raw, loaded_image.as_shot, render);
-        all_adjustments.global.show_clipping = 0;
 
         let lut = adjustments_clone["lutPath"]
             .as_str()
@@ -2687,13 +2684,12 @@ pub async fn estimate_export_sizes(
         .bitmaps;
 
         let render = resolve_render_options_from_handle(&app_handle, is_raw);
-        let mut all_adjustments = get_all_adjustments_from_json(
+        let all_adjustments = get_all_adjustments_from_json(
             &js_adjustments,
             is_raw,
             as_shot(&source_path_str),
             render,
         );
-        all_adjustments.global.show_clipping = 0;
 
         let lut = js_adjustments["lutPath"]
             .as_str()

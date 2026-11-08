@@ -37,7 +37,6 @@ const KEY_NAMES: Record<string, string> = {
   colorGrading: 'Color Grading',
   colorCalibration: 'Color Calibration',
   toneMapper: 'Tone Mapper',
-  showClipping: 'Show Clipping',
   activeTools: 'Tool Visibility',
   flareAmount: 'Flare Amount',
   glowAmount: 'Glow Amount',

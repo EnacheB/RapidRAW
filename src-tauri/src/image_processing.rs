@@ -2539,11 +2539,7 @@ fn get_global_adjustments_from_json(
             SCALES.chromatic_aberration,
             None,
         ),
-        show_clipping: if js_adjustments["showClipping"].as_bool().unwrap_or(false) {
-            1
-        } else {
-            0
-        },
+        show_clipping: 0,
         is_raw_image: if is_raw { 1 } else { 0 },
         grain_softness: (grain_amount * 3.75).min(1.0) * grain_size.min(1.0) * 0.75,
 

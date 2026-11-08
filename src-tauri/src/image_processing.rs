@@ -2031,12 +2031,6 @@ pub struct ViewOptions {
     pub show_clipping: bool,
 }
 
-impl ViewOptions {
-    pub fn apply(&self, adjustments: &mut AllAdjustments) {
-        adjustments.global.show_clipping = u32::from(self.show_clipping);
-    }
-}
-
 pub fn resolve_render_options(settings: &crate::AppSettings, is_raw: bool) -> RenderOptions {
     RenderOptions {
         tonemapper_override: resolve_tonemapper_override(settings, is_raw),

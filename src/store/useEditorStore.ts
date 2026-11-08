@@ -37,6 +37,12 @@ interface BaseRenderSize extends ImageDimensions {
 
 export type WgpuPhase = 'hidden' | 'arming' | 'live';
 
+// Editor view state that changes the preview's pixels but is never saved (overlays on
+// the finished picture). Sent with every preview render; see ViewOptions in the backend.
+export interface ViewOptions {
+  showClipping: boolean;
+}
+
 interface EditorState {
   // Core Image & Adjustments
   selectedImage: SelectedImage | null;
@@ -61,7 +67,7 @@ interface EditorState {
   histogram: ChannelConfig | null;
   waveform: WaveformData | null;
   isWaveformVisible: boolean;
-  showClipping: boolean;
+  viewOptions: ViewOptions;
   activeWaveformChannel: string;
   waveformHeight: number;
 
@@ -151,7 +157,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   histogram: null,
   waveform: null,
   isWaveformVisible: false,
-  showClipping: false,
+  viewOptions: { showClipping: false },
   activeWaveformChannel: 'luma',
   waveformHeight: 220,
 

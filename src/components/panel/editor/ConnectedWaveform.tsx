@@ -13,12 +13,13 @@ export default function ConnectedWaveform({ setDisplayMode, theme }: ConnectedWa
       hasWaveform: !!state.waveform,
       hasHistogram: !!state.histogram?.red,
       activeWaveformChannel: state.activeWaveformChannel,
-      showClipping: state.showClipping,
+      showClipping: state.viewOptions.showClipping,
     })),
   );
 
   const setEditor = useEditorStore((state) => state.setEditor);
-  const onToggleClipping = () => setEditor((state) => ({ showClipping: !state.showClipping }));
+  const onToggleClipping = () =>
+    setEditor((state) => ({ viewOptions: { ...state.viewOptions, showClipping: !state.viewOptions.showClipping } }));
 
   return (
     <Waveform

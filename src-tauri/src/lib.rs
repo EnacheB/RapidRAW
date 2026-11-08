@@ -612,6 +612,7 @@ impl EditorRender {
         scale: f32,
         unscaled_crop_offset: (f32, f32),
         render: image_processing::RenderOptions,
+        view: ViewOptions,
         image_generation: usize,
     ) -> Self {
         let mask_definitions: Vec<MaskDefinition> = adjustments
@@ -633,13 +634,15 @@ impl EditorRender {
             adjustments,
         );
         let (full_w, full_h) = loaded_image.image.dimensions();
+        let mut all_adjustments = get_all_adjustments_from_json(
+            adjustments,
+            loaded_image.is_raw,
+            loaded_image.as_shot,
+            render,
+        );
+        all_adjustments.global.show_clipping = u32::from(view.show_clipping);
         Self {
-            adjustments: get_all_adjustments_from_json(
-                adjustments,
-                loaded_image.is_raw,
-                loaded_image.as_shot,
-                render,
-            ),
+            adjustments: all_adjustments,
             mask_cache_key: masks.cache_key ^ image_generation as u64,
             masks,
             lut: adjustments["lutPath"]
@@ -714,6 +717,7 @@ async fn sample_hsl_mixer_area(
             preview.scale,
             preview.unscaled_crop_offset,
             resolve_render_options_from_handle(&app_handle, loaded_image.is_raw),
+            ViewOptions::default(),
             state.load_image_generation.load(Ordering::SeqCst),
         );
         let roi = gpu_processing::Roi {
@@ -892,7 +896,7 @@ fn process_preview_job(
         None
     };
 
-    let mut editor_render = EditorRender::prepare(
+    let editor_render = EditorRender::prepare(
         &state,
         &loaded_image,
         &adjustments_clone,
@@ -900,9 +904,9 @@ fn process_preview_job(
         effective_scale,
         unscaled_crop_offset,
         render,
+        view,
         image_generation,
     );
-    view.apply(&mut editor_render.adjustments);
 
     let wants_analytics = !(is_interactive && pixel_roi.is_some()) && request_analytics;
     let channel_filter = if is_interactive {

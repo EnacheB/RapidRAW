@@ -49,7 +49,7 @@ export function useImageProcessing(
   const adjustments = useEditorStore((state) => state.adjustments);
   const previewOverride = useEditorStore((state) => state.previewOverride);
   const isWaveformVisible = useEditorStore((state) => state.isWaveformVisible);
-  const showClipping = useEditorStore((state) => state.showClipping);
+  const viewOptions = useEditorStore((state) => state.viewOptions);
   const activeWaveformChannel = useEditorStore((state) => state.activeWaveformChannel);
   const displaySize = useEditorStore((state) => state.displaySize);
   const baseRenderSize = useEditorStore((state) => state.baseRenderSize);
@@ -103,13 +103,18 @@ export function useImageProcessing(
 
   const renderOriginal = useCallback(
     async (targetRes?: number) => {
-      const { selectedImage: image, adjustments: currentAdjustments, compareView: view } = useEditorStore.getState();
+      const {
+        selectedImage: image,
+        adjustments: currentAdjustments,
+        compareView: view,
+        viewOptions: currentViewOptions,
+      } = useEditorStore.getState();
       const ui = useUIStore.getState();
       if (view === 'off' || !image?.isReady || ui.activeView !== 'editor' || ui.activePanel === Panel.Crop) return;
 
       const originalAdjustments = getOriginalAdjustments(currentAdjustments);
       const { useWgpuRenderer } = useSettingsStore.getState().appSettings ?? {};
-      const key = JSON.stringify([image.path, targetRes, useWgpuRenderer, originalAdjustments]);
+      const key = JSON.stringify([image.path, targetRes, useWgpuRenderer, originalAdjustments, currentViewOptions]);
       if (key === originalRequestKeyRef.current) return;
       originalRequestKeyRef.current = key;
 
@@ -124,7 +129,7 @@ export function useImageProcessing(
           requestAnalytics: false,
           computeWaveform: false,
           activeWaveformChannel: null,
-          viewOptions: { showClipping: false },
+          viewOptions: currentViewOptions,
         });
         markSent();
 
@@ -162,7 +167,7 @@ export function useImageProcessing(
           requestAnalytics: true,
           computeWaveform: !!isWaveformVisible,
           activeWaveformChannel: activeWaveformChannelRef.current || null,
-          viewOptions: { showClipping },
+          viewOptions,
         });
         if (!dragging) renderOriginal(targetRes);
         const buffer = await request;
@@ -247,7 +252,7 @@ export function useImageProcessing(
       selectedImage?.path,
       calculateROI,
       isWaveformVisible,
-      showClipping,
+      viewOptions,
       setEditor,
       previewJobIdRef,
       latestRenderedJobIdRef,
@@ -549,7 +554,7 @@ export function useImageProcessing(
     appSettings?.copyPasteSettings?.includedAdjustments,
     appSettings?.copyPasteSettings?.autoSync,
     isWaveformVisible,
-    showClipping,
+    viewOptions,
   ]);
 
   return {

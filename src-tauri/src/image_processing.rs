@@ -66,6 +66,30 @@ where
     Ok(serde_json::from_value(Value::deserialize(deserializer)?).unwrap_or(None))
 }
 
+/// Keys older versions wrote into the adjustments that are not part of the recipe:
+/// XMP sync copied the rating there, and the clipping overlay was saved as an edit.
+/// Left in, they make an untouched photo look edited and keep its sidecar alive.
+const RETIRED_ADJUSTMENT_KEYS: [&str; 2] = ["rating", "showClipping"];
+
+/// Drops the retired keys when a sidecar is read, so every reader sees only the
+/// recipe and the next save writes it clean. Adjustments that held nothing else were
+/// never edited, so they read as none at all.
+fn deserialize_adjustments<'de, D>(deserializer: D) -> Result<Value, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut adjustments = Value::deserialize(deserializer)?;
+    if let Some(map) = adjustments.as_object_mut() {
+        let had_retired = RETIRED_ADJUSTMENT_KEYS
+            .iter()
+            .fold(false, |had, key| map.remove(*key).is_some() || had);
+        if had_retired && map.is_empty() {
+            adjustments = Value::Null;
+        }
+    }
+    Ok(adjustments)
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct ImageMetadata {
@@ -77,6 +101,7 @@ pub struct ImageMetadata {
         skip_serializing_if = "Option::is_none"
     )]
     pub flag: Option<ImageFlag>,
+    #[serde(deserialize_with = "deserialize_adjustments")]
     pub adjustments: Value,
     #[serde(default)]
     pub tags: Option<Vec<String>>,
@@ -4503,4 +4528,31 @@ pub async fn sample_white_balance(
     })
     .await
     .map_err(|e| format!("Task execution failed: {}", e))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn adjustments_of(sidecar: Value) -> Value {
+        serde_json::from_value::<ImageMetadata>(sidecar)
+            .unwrap()
+            .adjustments
+    }
+
+    #[test]
+    fn reading_a_sidecar_drops_retired_adjustment_keys() {
+        assert_eq!(
+            adjustments_of(json!({ "rating": 1, "adjustments": { "rating": 2 } })),
+            Value::Null
+        );
+        assert_eq!(
+            adjustments_of(json!({ "adjustments": { "showClipping": true, "exposure": 1.0 } })),
+            json!({ "exposure": 1.0 })
+        );
+        assert_eq!(
+            adjustments_of(json!({ "adjustments": { "baselineExposure": true } })),
+            json!({ "baselineExposure": true })
+        );
+    }
 }

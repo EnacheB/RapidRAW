@@ -125,7 +125,7 @@ use crate::gpu_processing::DisplayLayer;
 use crate::hdr_deghosting::{align_hdr_frames, assert_uniform_dimensions, load_hdr_frames};
 use crate::image_loader::prepare_base_image_cow;
 use crate::image_processing::{
-    Crop, GpuContext, RenderRequest, apply_linear_to_srgb, downscale_f32_image,
+    Crop, GpuContext, RenderRequest, ViewOptions, apply_linear_to_srgb, downscale_f32_image,
     get_all_adjustments_from_json, get_geometry_params_from_json, get_or_init_gpu_context,
     is_geometry_identity, process_and_get_dynamic_image, resolve_render_options,
     resolve_render_options_from_handle,
@@ -747,7 +747,7 @@ fn process_preview_job(
     request_analytics: bool,
     compute_waveform: bool,
     active_waveform_channel: Option<&str>,
-    show_clipping: bool,
+    view: ViewOptions,
     target: PreviewTarget,
 ) -> Result<Vec<u8>, String> {
     let fn_start = std::time::Instant::now();
@@ -768,7 +768,7 @@ fn process_preview_job(
         job_hash: calculate_full_job_hash(&loaded_image.path, &adjustments_json),
         patch_hash: calculate_patch_hash(&adjustments_json),
         render,
-        show_clipping,
+        view,
     };
     let mirrors_editor = target == PreviewTarget::Editor && layer == DisplayLayer::Edited;
     if mirrors_editor {
@@ -902,7 +902,7 @@ fn process_preview_job(
         render,
         image_generation,
     );
-    editor_render.adjustments.global.show_clipping = u32::from(show_clipping);
+    view.apply(&mut editor_render.adjustments);
 
     let wants_analytics = !(is_interactive && pixel_roi.is_some()) && request_analytics;
     let channel_filter = if is_interactive {
@@ -1153,7 +1153,7 @@ fn run_editor_job(app_handle: &tauri::AppHandle, job: PreviewJob) {
             job.request_analytics,
             job.compute_waveform,
             job.active_waveform_channel.as_deref(),
-            job.show_clipping,
+            job.view,
             PreviewTarget::Editor,
         )
     });
@@ -1177,7 +1177,7 @@ fn run_editor_job(app_handle: &tauri::AppHandle, job: PreviewJob) {
 }
 
 fn run_viewer_job(app_handle: &tauri::AppHandle) {
-    let Some((adjustments, show_clipping, target_resolution)) =
+    let Some((adjustments, view, target_resolution)) =
         viewer_window::pending_viewer_render(app_handle)
     else {
         return;
@@ -1194,7 +1194,7 @@ fn run_viewer_job(app_handle: &tauri::AppHandle) {
             false,
             false,
             None,
-            show_clipping,
+            view,
             PreviewTarget::Viewer,
         )
     });
@@ -1254,7 +1254,7 @@ async fn apply_adjustments(
     request_analytics: bool,
     compute_waveform: bool,
     active_waveform_channel: Option<String>,
-    show_clipping: bool,
+    view_options: ViewOptions,
     state: tauri::State<'_, AppState>,
 ) -> Result<Response, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -1275,7 +1275,7 @@ async fn apply_adjustments(
                 request_analytics,
                 compute_waveform,
                 active_waveform_channel,
-                show_clipping,
+                view: view_options,
                 responder: tx,
             };
             worker_tx

@@ -17,7 +17,7 @@ use crate::as_shot::AsShot;
 use crate::cache_utils::{DecodeFlights, DecodedImageCache};
 use crate::camera_tethering::CameraSession;
 use crate::gpu_processing::{DisplayLayer, GpuProcessor};
-use crate::image_processing::{GpuContext, RenderOptions};
+use crate::image_processing::{GpuContext, RenderOptions, ViewOptions};
 use crate::launch_request::ExternalEditSession;
 use crate::lut_processing::Lut;
 
@@ -118,7 +118,7 @@ pub struct FrameContent {
     pub job_hash: u64,
     pub patch_hash: u64,
     pub render: RenderOptions,
-    pub show_clipping: bool,
+    pub view: ViewOptions,
 }
 
 #[derive(Clone, Copy)]
@@ -239,7 +239,7 @@ pub struct PreviewJob {
     pub request_analytics: bool,
     pub compute_waveform: bool,
     pub active_waveform_channel: Option<String>,
-    pub show_clipping: bool,
+    pub view: ViewOptions,
     pub responder: tokio::sync::oneshot::Sender<Vec<u8>>,
 }
 

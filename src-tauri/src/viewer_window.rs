@@ -8,7 +8,7 @@ use crate::cache_utils::clear_preview_slot;
 use crate::gpu_processing::{DisplayView, WgpuDisplay, current_gpu_context};
 use crate::{
     AppState, FrameContent, PreviewTarget, PreviewTask, ShownFrame, ViewerImage, ViewerSession,
-    ViewerSource, ViewerState, load_settings,
+    ViewerSource, ViewerState, image_processing::ViewOptions, load_settings,
 };
 
 pub const VIEWER_LABEL: &str = "viewer";
@@ -114,7 +114,9 @@ fn render_target(session: &ViewerSession) -> Option<u32> {
     (!satisfied).then_some(target)
 }
 
-pub fn pending_viewer_render(app_handle: &AppHandle) -> Option<(serde_json::Value, bool, u32)> {
+pub fn pending_viewer_render(
+    app_handle: &AppHandle,
+) -> Option<(serde_json::Value, ViewOptions, u32)> {
     if !viewer_is_open(app_handle) {
         return None;
     }
@@ -132,11 +134,7 @@ pub fn pending_viewer_render(app_handle: &AppHandle) -> Option<(serde_json::Valu
         .source
         .as_ref()
         .filter(|source| source.path == loaded_path)?;
-    Some((
-        source.adjustments.clone(),
-        source.content.show_clipping,
-        target,
-    ))
+    Some((source.adjustments.clone(), source.content.view, target))
 }
 
 pub fn schedule_viewer_render(app_handle: &AppHandle) {

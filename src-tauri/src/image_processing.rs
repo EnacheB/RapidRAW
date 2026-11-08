@@ -2021,6 +2021,22 @@ pub struct RenderOptions {
     pub baseline: BaselineOptions,
 }
 
+/// Editor view state that changes the preview's pixels but is never saved: overlays
+/// painted over the finished picture. Changes to what gets rendered (preset hover,
+/// show original, compare) are a different recipe, not a view option. Only editor
+/// previews take these; render parameters built from adjustments leave them off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewOptions {
+    pub show_clipping: bool,
+}
+
+impl ViewOptions {
+    pub fn apply(&self, adjustments: &mut AllAdjustments) {
+        adjustments.global.show_clipping = u32::from(self.show_clipping);
+    }
+}
+
 pub fn resolve_render_options(settings: &crate::AppSettings, is_raw: bool) -> RenderOptions {
     RenderOptions {
         tonemapper_override: resolve_tonemapper_override(settings, is_raw),

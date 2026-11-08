@@ -124,7 +124,7 @@ export function useImageProcessing(
           requestAnalytics: false,
           computeWaveform: false,
           activeWaveformChannel: null,
-          showClipping: false,
+          viewOptions: { showClipping: false },
         });
         markSent();
 
@@ -162,7 +162,7 @@ export function useImageProcessing(
           requestAnalytics: true,
           computeWaveform: !!isWaveformVisible,
           activeWaveformChannel: activeWaveformChannelRef.current || null,
-          showClipping,
+          viewOptions: { showClipping },
         });
         if (!dragging) renderOriginal(targetRes);
         const buffer = await request;

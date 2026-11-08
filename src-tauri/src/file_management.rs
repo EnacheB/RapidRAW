@@ -4515,12 +4515,6 @@ pub fn sync_metadata_from_xmp(
             && rating != 0
         {
             metadata.rating = rating;
-            if !metadata.adjustments.is_object() {
-                metadata.adjustments = default_adjustments();
-            }
-            if let Some(obj) = metadata.adjustments.as_object_mut() {
-                obj.insert("rating".to_string(), serde_json::json!(rating));
-            }
             changed = true;
         }
 
